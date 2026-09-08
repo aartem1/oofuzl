@@ -50,7 +50,7 @@ guard  →  freezes the current state as a baseline and refuses commits that mak
 | Layer | Tools | Produces | Used by |
 |---|---|---|---|
 | L1 Sonar | a dedicated quality profile forked from `Sonar way` | reliability, security, coverage, maintainability rating, cognitive complexity | `audit` only — **optional** |
-| L2 local | `lizard`, `jscpd`, `madge`, `vulture`/`knip`, `git`, a Python AST pass, direct file reads | size, token cost, cyclomatic complexity, parameters, nesting, exact and near-duplicate clones, import cycles, dead code, churn | all three — **the only layer `guard` uses** |
+| L2 local | `lizard`, `jscpd`, `madge`, `vulture`, `git`, a Python AST pass, direct file reads | size, token cost, cyclomatic complexity, parameters, nesting, exact and near-duplicate clones, import cycles, dead code, churn | all three — **the only layer `guard` uses** |
 | L3 derived | this plugin's own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` only |
 
 **L1 is optional.** Without Docker, the Sonar layer reports `not measured` with a stated reason and
@@ -93,9 +93,12 @@ per-run flag.
 | Docker + SonarQube | the L1 layer | `L1: not measured`, audit continues |
 | `pre-commit` | activating the `guard` hook | `guard install` reports and stops before writing anything |
 
-`jscpd`, `madge`, `vulture`, and `knip` sharpen individual `audit` findings (exact clones, JS/TS
-import graphs, dead code) and are installed the same way as `lizard` when missing; their absence
-narrows one finding, not the whole audit.
+`jscpd`, `madge`, and `vulture` sharpen individual `audit` findings (exact clones, JS/TS import
+graphs, Python dead code) and are installed the same way as `lizard` when missing; their absence
+narrows one finding, not the whole audit. Each run probes only the tools its requested layers can
+use. JS/TS dead code is reported as **not measured**: `knip` would be the tool for it, but this
+plugin has no verified parser for its output and says so rather than reporting a clean result it
+never read.
 
 ## Where state lives
 

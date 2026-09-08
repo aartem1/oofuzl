@@ -25,9 +25,12 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
   `SONAR_TOKEN` or a local credential store.
 - Preserve any pre-existing working-tree changes. Record `git status` before analysis and verify
   tracked/staged state is unchanged afterward. Never reset or stash user work automatically.
-- Local measurement-tool provisioning (`lizard`, `jscpd`, `madge`, `vulture`, `knip`) is
-  **automatic**, via `measure.py --install-missing` — no per-tool prompt. Report what it installed;
-  see step 2.
+- Local measurement-tool provisioning (`lizard`, `jscpd`, `madge`, `vulture`) is **automatic**, via
+  `measure.py --install-missing` — no per-tool prompt. Report what it installed; see step 2.
+  `measure.py` probes only the tools the requested layers can actually use, so the `tools` block
+  lists those and no others; a tool missing from the block was not needed, not silently skipped.
+  `knip` is not among them: JS/TS dead code is `not_measured` because its output is not parsed
+  (`<plugin-root>/references/tools.md`).
 - Creating or starting the local SonarQube container is a **different, permission-gated** action:
   it is a persistent Docker artifact, not a project-scoped `npx`/`uv tool` install. If no usable
   container exists, ask once whether to install/create one before pulling images or creating it.
