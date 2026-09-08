@@ -47,11 +47,16 @@ class PluginLayoutTests(unittest.TestCase):
         self.assertEqual([p["name"] for p in data["plugins"]], ["sp"])
 
     def test_no_old_name_survives_anywhere(self):
-        # DESIGN.md and docs/ name the old plugin on purpose: the spec's first
-        # line is "Supersedes plugins/sonar-code-health" and the plan records the
-        # rename. A test that forbids naming what you replaced forbids history.
+        # The needle is assembled at runtime so THIS file does not contain the
+        # literal it forbids -- otherwise git grep matches the test itself and
+        # the test fails permanently the moment it is committed.
+        # docs/ and the spec are excluded because they name the old plugin on
+        # purpose: the spec's first line says what it supersedes, and the plan
+        # records the rename. A test that forbids naming what you replaced
+        # forbids writing history down.
+        needle = "-".join(("sonar", "code", "health"))
         out = subprocess.run(
-            ["git", "grep", "-l", "sonar-code-health", "--",
+            ["git", "grep", "-l", needle, "--",
              ".", ":!docs", ":!plugins/code-health/DESIGN.md"],
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
