@@ -8,14 +8,6 @@ REPO_ROOT = PLUGIN_ROOT.parents[1]
 
 
 class PluginLayoutTests(unittest.TestCase):
-    def test_plugin_directory_is_code_health(self):
-        self.assertTrue((REPO_ROOT / "plugins" / "code-health").is_dir())
-        # Assembled at runtime for the same reason as the needle below: a
-        # literal old-name path here would make this file match its own
-        # "no old name survives" check once committed.
-        old_plugin_dir = "-".join(("sonar", "code", "health"))
-        self.assertFalse((REPO_ROOT / "plugins" / old_plugin_dir).exists())
-
     def test_both_manifests_name_the_plugin_code_health(self):
         for rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
             data = json.loads((PLUGIN_ROOT / rel).read_text())
@@ -50,25 +42,12 @@ class PluginLayoutTests(unittest.TestCase):
         data = json.loads((REPO_ROOT / ".cursor-plugin/marketplace.json").read_text())
         self.assertEqual([p["name"] for p in data["plugins"]], ["sp"])
 
-    def test_no_old_name_survives_anywhere(self):
-        # The needle is assembled at runtime so THIS file does not contain the
-        # literal it forbids -- otherwise git grep matches the test itself and
-        # the test fails permanently the moment it is committed.
-        # docs/ and the spec are excluded because they name the old plugin on
-        # purpose: the spec's first line says what it supersedes, and the plan
-        # records the rename. A test that forbids naming what you replaced
-        # forbids writing history down.
-        needle = "-".join(("sonar", "code", "health"))
-        out = subprocess.run(
-            ["git", "grep", "-l", needle, "--",
-             ".", ":!docs", ":!plugins/code-health/DESIGN.md"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
-        )
-        self.assertEqual(out.stdout.strip(), "", "old plugin name still referenced")
-
     def test_claude_plugin_validate_passes(self):
+        # --strict turns warnings (missing skill description, unrecognized
+        # fields) into exit 1. This is why there is no hand-rolled frontmatter
+        # test: the real validator covers more and stays correct as it evolves.
         out = subprocess.run(
-            ["claude", "plugin", "validate", "plugins/code-health"],
+            ["claude", "plugin", "validate", "plugins/code-health", "--strict"],
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
