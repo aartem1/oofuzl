@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Health Guard"
+  short_description: "Храповик качества через pre-commit"
+  default_prompt: "Use $guard install to freeze current code health as a committed baseline and block commits that make it worse."
