@@ -169,9 +169,13 @@ means zero-or-more directories. Python's `fnmatch` and `PurePath.match` do not a
 `**/dist/**` matches `packages/web/dist/a.js` but **not** top-level `dist/a.js`, and
 `**/node_modules/**` matches neither.
 
-`measure.py` is stdlib-only, so it implements gitwildmatch semantics itself in one small function
-and normalizes each configured pattern to the pair `{p, p.removeprefix("**/")}` before matching.
-The rule is stated in `references/tools.md` so nobody "simplifies" it back to `fnmatch`.
+`measure.py` is stdlib-only, so `compile_pattern` translates each gitwildmatch pattern into a
+regex over the POSIX relative path — `**/` becomes `(?:[^/]+/)*` (zero or more directories), `*`
+becomes `[^/]*` so it cannot cross a separator, and every other character is escaped as a literal.
+No `fnmatch` anywhere in that path. An earlier draft of this section proposed normalizing each
+pattern to the pair `{p, p.removeprefix("**/")}` and matching with `fnmatch`; implementing the
+semantics directly turned out to be both shorter and correct for cases the pair trick still misses,
+so that is what ships. The rule is restated in `references/tools.md` so nobody "simplifies" it back.
 
 Exclusion discipline, inherited and non-negotiable: exclude only evidence-backed generated /
 vendored / cache / build-output paths. Exclude agent working directories (`.claude/`, `.agents/`,
@@ -252,6 +256,11 @@ long_name, start_line, end_line, max_nested_structures
 
 `max_nested_structures` is appended last and only appears with `-ENS`. `long_name` contains commas
 and is quoted; parse with `csv.reader`, never `split(",")`.
+
+`max_nested_structures` is lizard's own column and threshold-field name — `-Tnd=` is rejected with
+`Wrong field name 'nd'`. Once parsed, the value is carried under the key `nesting`, matching the
+`thresholds.nesting` config key, so the same quantity has lizard's name on the way in and this
+plugin's name everywhere after.
 
 **File-level size never comes from lizard.** `--csv` emits function rows only — a 5000-line
 function-free file produces empty output and exit 0, and would otherwise be invisible. File lines,
