@@ -1,61 +1,150 @@
 ---
 name: audit
-description: Run a read-only code-health audit of a repository with a local SonarQube Community Build. Set up or reuse Sonar safely, choose project-appropriate analysis settings without editing the repository, reuse only genuinely fresh results, and return a compact prioritized report with bounded agent review for Sonar blind spots.
-compatibility: Requires local shell access and Docker for automatic SonarQube setup. Designed for Claude Code and Codex-compatible Agent Skills.
+description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
+compatibility: Requires local shell access. lizard is installed automatically; Docker is optional and only enables the Sonar layer. Designed for Claude Code and Codex-compatible Agent Skills.
 ---
 
-# Sonar Code Health Audit
+# Code Health Audit
 
-Audit the target repository without changing its source, tests, build files, quality configuration, or tracked repository state. Use SonarQube as the deterministic source of findings; add model judgment only where it improves prioritization or covers clear Sonar blind spots.
+Audit the target repository without changing its source, tests, build files, ignore files, or
+Sonar/quality configuration. `scripts/measure.py` (local, always available) is the baseline of
+every audit; SonarQube layers on top of it when reachable and is never required to produce a
+useful report.
 
 Use the repository/path supplied by the user. Otherwise use the current Git repository.
 
 ## Hard rules
 
-- Audit mode is read-only for the target repository. Never edit code, tests, build files, ignore files, Sonar config, or quality profiles.
-- Never transition from audit into code changes in the same session. If the user chooses something to fix, return a fresh-session `/code-health:fix ...` handoff and stop.
-- Never improve a score by excluding real source code, disabling rules, changing thresholds, marking issues false-positive, or adding suppressions.
-- Never commit credentials. Do not ask the user to paste a Sonar token into chat; prefer `SONAR_TOKEN` or a local credential store.
-- Preserve any pre-existing working-tree changes. Record `git status` before analysis and verify tracked/staged state is unchanged afterward. Never reset or stash user work automatically.
-- Installation is the only step that requires explicit permission: if no usable local SonarQube container exists, ask whether to install/create one before pulling images or creating the server container.
-- If Docker itself is unavailable or unhealthy, report that prerequisite concisely and stop rather than installing a container runtime implicitly.
+- Read-only for the target repository. Never edit code, tests, build files, ignore files, Sonar
+  config, or quality profiles inside it.
+- Never improve a score by excluding real source code, disabling rules, changing thresholds,
+  marking issues false-positive, or adding suppressions.
+- Never transition from audit into code changes in the same session. If the user picks something
+  to fix, return a fresh-session `/code-health:fix ...` handoff and stop.
+- Never commit credentials. Do not ask the user to paste a Sonar token into chat; prefer
+  `SONAR_TOKEN` or a local credential store.
+- Preserve any pre-existing working-tree changes. Record `git status` before analysis and verify
+  tracked/staged state is unchanged afterward. Never reset or stash user work automatically.
+- Local measurement-tool provisioning (`lizard`, `jscpd`, `madge`, `vulture`, `knip`) is
+  **automatic**, via `measure.py --install-missing` — no per-tool prompt. Report what it installed;
+  see step 2.
+- Creating or starting the local SonarQube container is a **different, permission-gated** action:
+  it is a persistent Docker artifact, not a project-scoped `npx`/`uv tool` install. If no usable
+  container exists, ask once whether to install/create one before pulling images or creating it.
+- If Docker itself is unavailable or unhealthy, do not install a container runtime implicitly.
+  Report that concisely, mark `L1: not_measured` with the reason, and continue the audit on L2/L3
+  alone — a missing or unhealthy Docker stops the Sonar layer, never the whole audit.
+- Audit may write to the **Sonar server** (create the project, create/reconcile the quality
+  profile) but never to the target repository. Disclose and confirm this once per server before
+  the first write; later audits against the same server reconcile silently unless an actual write
+  happens, which is then announced in the report (see step 5).
 
 ## 1. Resolve scope and baseline
 
-1. Resolve the repository root and inspect its languages, build system, monorepo layout, generated/vendor directories, existing tests, CI commands, and coverage artifacts.
-2. Record:
-   - current branch and `HEAD` SHA;
-   - whether the working tree is clean;
-   - existing tracked/staged changes;
-   - repository remote when available.
-3. Derive a deterministic Sonar project key from the repository identity. Prefer the Git remote owner/repository; otherwise use the repository basename plus a short stable hash of its absolute path. Never require a project config file in the target repository.
+1. Resolve the repository root and inspect its languages, build system, monorepo layout,
+   generated/vendor directories, existing tests, CI commands, and coverage artifacts.
+2. Record: current branch and `HEAD` SHA; whether the working tree is clean; existing
+   tracked/staged changes; repository remote when available.
+3. Derive a deterministic project key from the repository identity. Prefer the Git remote
+   owner/repository; otherwise use the repository basename plus a short stable hash of its absolute
+   path. Never require a project config file in the target repository (`.code-health/config.json`
+   is optional and, when present, only overrides thresholds/excludes — see DESIGN §6).
 
-## 2. Ensure local SonarQube
+## 2. Run the local measurer — always, first
+
+`measure.py` is the L2+L3 baseline. Run it unconditionally, before touching Sonar, writing its
+output somewhere **outside the target repository** (a fresh `mktemp -d`, never a path inside the
+repo even if gitignored):
+
+```bash
+python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <tmp>/measure.json
+```
+
+- **Exit code 0 means "produced a valid document"**, including when every optional tool is missing
+  and every layer is `not_measured`. Findings never change the exit code. A non-zero exit is a
+  usage error (bad `--repo`, unreadable config) — fix the invocation, do not read it as "the
+  repository is unhealthy" or as an audit finding.
+- Read the document's `tools` block and report it as **one line**: every tool with
+  `available: true, installed_by_us: true` goes under "Installed for this audit"; every tool with
+  `available: true, installed_by_us: false` goes under "Already present". For example:
+  `Installed for this audit: jscpd@5.1.2, madge@8.0.0. Already present: lizard 1.23.0, vulture 2.7.`
+  A tool that stayed `available: false` is not part of this line — its absence is carried instead
+  by that layer's own `status`/`reason` (step 6, step 8).
+- Keep the parsed `layers` and `findings` from this document; they feed grouping (step 7) and the
+  report (step 9) regardless of whether Sonar ends up available.
+
+## 3. Layer Sonar on top, when reachable
 
 Follow `<plugin-root>/references/sonar.md`.
 
-- Reuse a healthy existing SonarQube Community Build container when possible, even if its name differs.
-- Start a stopped compatible container rather than creating another one.
-- If none exists, ask once whether to install/create the local Community Build. On approval, use persistent Docker volumes so later audits are cheap and state survives restarts.
+- Reuse a healthy existing SonarQube Community Build container when possible, even if its name
+  differs. Start a stopped compatible container rather than creating another one.
+- If none exists, ask once whether to install/create the local Community Build (see hard rules
+  above). On approval, use persistent Docker volumes so later audits are cheap and state survives
+  restarts.
 - Wait for SonarQube to report a healthy/up state before analysis.
-- If authentication is not configured, guide the user through the smallest one-time setup. Prefer a user token exposed through `SONAR_TOKEN`; never write it into the repository.
+- If authentication is not configured, guide the user through the smallest one-time setup. Prefer a
+  user token exposed through `SONAR_TOKEN`; never write it into the repository.
+- If Docker is unavailable/unhealthy, or the user declines installation, or setup otherwise fails:
+  set `L1: not_measured` with the reason and move straight to step 6. Do not retry indefinitely and
+  do not block the rest of the audit on this layer.
 
-## 3. Configure analysis for this repository
+### What is lost without L1
+
+State this table in the report whenever `L1: not_measured` or `partial`, rather than letting the
+missing rows imply the repository has no issues there:
+
+| Scorecard row | Without Sonar |
+|---|---|
+| Reliability | `not measured` |
+| Security + hotspots | `not measured` |
+| Coverage | `not measured` (never `0 %`) |
+| Maintainability rating / debt | `not measured` |
+| Cognitive complexity | `not measured`; CCN (from L2 `lizard`) reported instead, labelled as such |
+| Complexity (CCN), Size, Token cost, Duplication, Churn | measured (L2/L3) |
+
+**Consequence, said plainly, not implied:** a Sonar-less audit can **structurally never raise a
+P0** — the P0 tier is defined by correctness/security evidence that only L1 produces. Say this in
+the report rather than letting the absence of a P0 read as "nothing urgent."
+
+## 4. Configure Sonar analysis for this repository
 
 Choose the scanner and analysis parameters from the actual project, not a generic template.
 
-- Compare the host architecture with the architecture of any scanner image before using it. A scanner image that does not match the host runs under emulation, where type-aware JS/TS analysis can stall indefinitely; in that case run the scanner natively and keep only the server containerised. See `<plugin-root>/references/sonar.md`.
-- Prefer a build-system-specific official Sonar scanner when it materially improves analysis (for example .NET/build-integrated ecosystems); otherwise use the generic SonarScanner CLI or its Docker image.
-- Pass configuration through CLI/environment/temporary files outside the repository. Do not create `sonar-project.properties` in audit mode.
-- Include real maintained source. Exclude only evidence-backed generated, vendored, cache, dependency, build-output, minified, or coverage-output directories.
+- Compare the host architecture with the architecture of any scanner image before using it. A
+  scanner image that does not match the host runs under emulation, where type-aware JS/TS analysis
+  can stall indefinitely; in that case run the scanner natively and keep only the server
+  containerised. See `<plugin-root>/references/sonar.md`.
+- Prefer a build-system-specific official Sonar scanner when it materially improves analysis (for
+  example .NET/build-integrated ecosystems); otherwise use the generic SonarScanner CLI or its
+  Docker image.
+- Pass configuration through CLI/environment/temporary files outside the repository. Do not create
+  `sonar-project.properties` in audit mode.
+- Include real maintained source. Exclude only evidence-backed generated, vendored, cache,
+  dependency, build-output, minified, or coverage-output directories.
 - Correctly classify tests where practical so test code does not distort source metrics.
-- Reuse existing coverage reports when they correspond to the current source state. If the repository has an obvious documented/local-safe coverage command, it may be run; do not invent or edit test configuration merely to obtain coverage.
 - Do not hide legacy or difficult code just because it produces findings.
-- Verify the resulting scope before trusting it: check the indexed file count and the excluded-sources line in the scanner log. Whole-repository copies left behind by tooling (agent worktrees, backups) and nested cache directories that root-anchored patterns miss will otherwise inflate every metric.
+- Verify the resulting scope before trusting it: check the indexed file count and the
+  excluded-sources line in the scanner log. Whole-repository copies left behind by tooling (agent
+  worktrees, backups) and nested cache directories that root-anchored patterns miss will otherwise
+  inflate every metric.
 
-## 4. Decide whether to reuse or rerun
+**Quality profile.** Follow `<plugin-root>/references/sonar.md` and DESIGN §12: extend the built-in
+`Sonar way` profile per language (`create` → `change_parent` → `activate_rule` → `add_project`),
+never `copy` it. On a `403` from insufficient permission, fall back to the built-in profile, mark
+`L1: partial`, and print the reason and the permission needed — this is not a failure, it is the
+honest state described in step 3's table.
 
-Reuse a previous Sonar analysis only when all of these hold:
+**Coverage discipline.** Reuse existing coverage reports when they correspond to the current source
+state. If the repository has an obvious documented/local-safe coverage command, it may be run; do
+not invent or edit test configuration merely to obtain coverage. Rewrite report paths to be
+repository-relative before import, and confirm in the scanner log that each report was actually
+matched. Report coverage as `unavailable` per language when no report was matched — **never `0 %`**.
+
+## 5. Decide whether to reuse or rerun Sonar
+
+`measure.py` is cheap and local: always run it fresh (step 2). Sonar analysis is the expensive part
+worth reusing. Reuse a previous Sonar analysis only when all of these hold:
 
 - the working tree is clean;
 - the latest successful Sonar analysis records the same revision as current `HEAD`;
@@ -63,92 +152,124 @@ Reuse a previous Sonar analysis only when all of these hold:
 - the requested scope/configuration has not materially changed;
 - the user did not explicitly request a fresh scan.
 
-If the working tree has any source changes, rerun. If freshness cannot be proven, rerun rather than guessing.
+If the working tree has any source changes, rerun. If freshness cannot be proven, rerun rather than
+guessing.
 
-## 5. Run and collect
+## 6. Run and collect Sonar
 
-1. Run analysis and wait for the Compute Engine task to finish successfully; scanner exit alone is not enough.
-2. Fetch through the Sonar Web API for the **whole analyzed codebase**, not only new-code gate conditions:
-   - quality gate status, treated only as one signal;
-   - unresolved issues with pagination;
-   - security hotspots when available;
-   - current measures, especially code size, cognitive/cyclomatic complexity, duplication, coverage when available, and technical-debt/maintainability measures supported by the server;
-   - file/component-level measures sufficient to identify complexity and duplication hotspots;
-   - latest analysis revision/time.
-3. A green quality gate must never be reported as proof that the repository is healthy if overall-code findings or metrics say otherwise.
-4. Confirm that any coverage report you supplied was actually matched, and treat languages with no report as unmeasured rather than uncovered.
+1. Run analysis and wait for the Compute Engine task to finish successfully; scanner exit alone is
+   not enough.
+2. Fetch through the Sonar Web API for the **whole analyzed codebase**, not only new-code gate
+   conditions: quality gate status (one signal, not the verdict); unresolved issues with
+   pagination; **security hotspots when the server provides them**; current measures (size,
+   cognitive/cyclomatic complexity, duplication, coverage when available, maintainability/debt);
+   file/component-level measures sufficient to identify complexity and duplication hotspots; latest
+   analysis revision/time.
+3. A green quality gate must never be reported as proof the repository is healthy if overall-code
+   findings or metrics say otherwise.
 4. Keep raw API detail out of the user-facing answer unless needed to diagnose a failure.
-5. After analysis, verify the repository's tracked/staged state is identical to the baseline. Remove only temporary artifacts created by this audit when they are unambiguously known; never delete pre-existing files.
+5. After analysis, verify the repository's tracked/staged state is identical to the baseline from
+   step 1. Remove only temporary artifacts created by this audit when unambiguously known; never
+   delete pre-existing files.
 
-## 6. Prioritize intelligently
+## 7. From findings to groups
 
-Use `<plugin-root>/references/quality-policy.md`.
+Do not dump every finding. `measure.py` emits flat `findings`; Sonar emits flat issues/hotspots.
+Turn both into ledger groups by likely root cause, using `<plugin-root>/references/quality-policy.md`
+for priority and grouping judgment, plus this mapping (DESIGN §8):
 
-Do not dump every issue. Group findings by likely root cause, rule, subsystem, and remediation shape. Prioritize by expected engineering value, not severity alone.
+| Kind | Grouped by | Typical group |
+|---|---|---|
+| `file_too_long`, `file_too_expensive` | subsystem/directory | "22 backend report files over the 1000-line cut" |
+| `function_too_long`, `function_too_complex`, `too_deep_nesting` | the enclosing file when several fire there, otherwise the subsystem | "one 211-line, CCN-18 function" |
+| `too_many_params` | the shared parameter-name **set** (below), not a raw count | "114 functions carrying the same 8-argument report context" |
+| `near_duplicate`, `exact_clone` | the cluster, one group per cluster | "cache protocol copied into 16 files" |
+| `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
+| `dead_symbol` | the owning module/package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
+| Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
+| `hotspot`, `edit_fanout`, `symbol_collision` | **never their own group** | they re-rank the groups above and appear as evidence inside that group's `why` |
 
-Prefer this order when evidence supports it:
+**Parameter-set clustering** for `too_many_params`: `measure.py`'s Python `ast` pass emits each
+function's ordered parameter-name tuple; group functions by Jaccard ≥ 0.6 over their parameter-name
+**sets**. Languages with no `ast` pass fall back to grouping by subsystem — say which was used.
 
-1. correctness/reliability and security risks;
-2. high-complexity or high-coupling code that is costly or risky to change;
-3. meaningful duplication and maintainability clusters;
-4. coverage gaps around risky/central behavior;
-5. low-value stylistic or localized smells.
+Prefer this priority order when evidence supports it: correctness/reliability/security risk;
+high-complexity or high-coupling code that is costly/risky to change; meaningful duplication and
+maintainability clusters; coverage gaps around risky/central behavior; low-value stylistic smells.
+State what share of findings comes from rules representing no engineering decision (generated code,
+syntax-modernization rules) so the headline count is not mistaken for actionable work.
 
-A large number of low-value findings must not obscure a small number of important ones.
+### Group identity: `gid` vs. label
 
-## 7. Persist a small fresh-session handoff
-
-After grouping priorities, save a compact local JSON handoff **outside the audited repository** so a new session can resolve a short selection such as `A1`.
-
-Use `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/` and a filename derived from the stable Sonar project key. Create the directory if needed.
-
-Store only:
-
-- schema version;
-- project key and local repository path;
-- current `HEAD`, clean/dirty state, branch, and audit timestamp;
-- Sonar analysis revision/key when available;
-- priority groups `A1`, `A2`, ... with title, priority, issue keys, rule keys, and affected file paths.
-
-Never store source snippets, secrets, credentials, scanner tokens, or raw API dumps. This file is convenience metadata, not a source of truth: a fix session must revalidate against the current repository and Sonar before editing.
-
-Overwrite only this plugin-owned latest-audit state for the same project; do not create an unbounded history by default.
+Each group gets a content-derived `gid` (`"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`)
+and a display label `A1…An` assigned fresh, in priority order, by this run. **The ledger's `queue`
+stores `gid`, never the label** — positional labels plus a queue preserved across audits would
+silently point a resumed fix at a different problem: after a re-audit reshuffles priority order, a
+pending `A5` from before now names whichever group happens to be fifth *this time*, and the
+intended safeguard ("flag it if the referenced group is gone") never fires, because `A5` still
+exists. Report labels to the user; write `gid` to the ledger.
 
 ## 8. Add bounded model review only when useful
 
-Sonar is the primary evidence. Add an `Agent review` section only if inspecting the repository can materially improve the conclusion, for example:
+Sonar/measure.py findings are the primary evidence. Add an "Agent review" section only if
+inspecting the repository can materially improve the conclusion — several findings share one
+architectural root cause, Sonar is green but the repository still shows obvious overengineering or
+weak tests around critical logic, or an issue is likely a false positive. Inspect enough
+surrounding code, call sites, tests, and module structure to support the claim. Limit this section
+to **at most three** high-value observations, clearly labelled as model analysis rather than
+scanner findings. Do not invent business requirements.
 
-- several Sonar findings appear to share one architectural root cause;
-- Sonar is green but the repository still shows obvious overengineering, inappropriate dependency direction, misleading abstractions, or weak tests around critical logic;
-- an issue is likely a false positive or a naive fix would make the design worse.
+## 9. Persist the debt ledger
 
-Inspect enough surrounding code, call sites, tests, and module structure to support the claim. Limit this section to at most three high-value observations. Clearly label them as model analysis rather than Sonar findings. Do not invent business requirements.
+Write the ledger yourself, as JSON — there is no script for this step. Follow
+`<plugin-root>/references/ledger.md` for the exact schema, location, and the group-identity and
+locator-not-source-of-truth rules; do not restate the schema from memory.
 
-## 9. Report for a human, not for a scanner
+- Location: `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json`. Create the
+  directory if needed. If a `sonar-code-health/` directory exists alongside it from the previous
+  plugin generation, mention it once so the user can delete it — do not migrate or delete it
+  yourself.
+- If a ledger already exists for this project, read it first and **carry its `queue` forward
+  unchanged** unless every item in it is `done`/`skipped`/`failed`. Overwrite `audit` and `groups`
+  with this run's fresh results; never touch `queue` items beyond preserving them.
+- Store only locators (paths, function names, finding/issue/rule ids, metric values) — never
+  source snippets, secrets, or raw API dumps.
 
-Reply in the user's language. Keep the default report compact and scannable; prefer roughly 40–60 lines or less unless the user asks for details.
+## 10. Report for a human, not for a scanner
 
-**Repository health** — one-line verdict based on overall findings/metrics, plus quality-gate status, analyzed revision/time, and whether the result was reused or freshly scanned.
+Reply in the user's language. Budget **≈60–80 lines** — raised from the previous 40–60 because this
+report carries roughly 15 lines of genuinely new content (the provisioning line, three new
+Scorecard rows, the Agent ergonomics section, per-layer status, noise accounting); do not shrink
+back to the old budget, that just drops one of those silently.
 
-**Scorecard** — a small table or compact bullets for Reliability, Security, Maintainability, Complexity, Duplication, Coverage (if available), each with a plain-language status rather than raw metrics only. Use overall-code data unless explicitly labeled otherwise.
+1. **Provisioning** — the one-line tool-provisioning summary from step 2.
+2. **Repository health** — one-line verdict based on overall findings/metrics, plus quality-gate
+   status (if L1 ran), analyzed revision/time, and whether Sonar was reused or freshly scanned.
+   When `L1: not_measured`/`partial`, say so with the reason here, not only in the Scorecard.
+3. **Scorecard** — Reliability, Security, Maintainability, Complexity, Duplication, Coverage, plus
+   the new **Size**, **Token cost**, **Churn** rows. Every row carries a plain-language status and
+   an explicit `measured` / `not measured` tag; use the step-3 table for what to write when
+   `not measured`.
+4. **Fix first** — at most five grouped priorities, labelled `A1`, `A2`, ... . For each: `P0`
+   /`P1`/`P2`/`P3`; short problem name; why it matters (including any hotspot/fan-out/collision
+   evidence that moved its priority); approximate scope (issue count/files/modules); recommended
+   remediation direction; enough rule/finding identity to select it without dumping every key.
+5. **Hotspots** — only when useful, the few files/modules concentrating disproportionate
+   complexity, duplication, or important findings. Not a file dump.
+6. **Agent ergonomics** (new, ≤10 lines) — token cost (largest/most expensive files), symbol
+   collisions, churn×complexity hotspots, edit fan-out; each tagged `measured`/`not measured`. This
+   is model-context cost, not code quality — keep it separate from the Scorecard and from Fix
+   first, per `references/quality-policy.md`'s "Agent-ergonomics metrics".
+7. **Worth noting** — meaningful lower-priority patterns, false-positive candidates, or missing
+   signals (e.g. unavailable coverage).
+8. **Agent review** — optional, at most three observations (step 8).
 
-**Fix first** — at most five grouped priorities. Assign stable-for-this-audit IDs `A1`, `A2`, ... . For each include:
-- `P0`/`P1`/`P2`/`P3`;
-- short problem name;
-- why it matters;
-- approximate scope (issue count/files/modules);
-- recommended remediation direction;
-- enough Sonar rule/issue identity to understand what is selected without dumping every key.
+Include the local Sonar dashboard URL when useful for drilling into details, and announce any
+actual Sonar-server write (project created, profile created/reconciled) here per the permission
+boundary in the hard rules.
 
-**Hotspots** — only when useful, list the few files/modules that concentrate disproportionate complexity, duplication, or important findings. Do not turn this into a file dump.
-
-**Worth noting** — only meaningful lower-priority patterns, false-positive candidates, or missing signals such as unavailable coverage.
-
-**Agent review** — optional, maximum three observations.
-
-Include the local Sonar dashboard URL when it is useful for drilling into details.
-
-Finish with one copyable handoff for a fresh session, for example:
+Finish with one copyable handoff for a fresh session, using the display label:
 `/code-health:fix A1`
 
-Do not suggest fixing everything automatically. The user chooses the problem/group to change. If they choose one in this same session, provide only the fresh-session handoff; do not edit code here.
+Do not suggest fixing everything automatically. The user chooses the group to change. If they
+choose one in this same session, provide only the fresh-session handoff; do not edit code here.

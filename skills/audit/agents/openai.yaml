@@ -1,4 +1,4 @@
 interface:
-  display_name: "Sonar Repository Audit"
-  short_description: "Аудит качества репозитория через локальный Sonar"
-  default_prompt: "Use $audit to run a read-only SonarQube health audit of the current repository and return a compact prioritized report."
+  display_name: "Code Health Audit"
+  short_description: "Аудит качества репозитория под работу агента"
+  default_prompt: "Use $audit to measure repository code health and return a compact prioritized report with a debt ledger."
