@@ -292,35 +292,38 @@ def compare(measured, baseline, thresholds):
     base_files = baseline.get("files", {})
     for path, current in sorted(measured.items()):
         base = base_files.get(path, {})
-        for label, key, tkey in _FILE_CHECKS:
-            warn = thresholds[tkey]["warn"]
-            limit = ceiling(base.get(key), warn)
-            if exceeds(current[key], limit):
-                violations.append({
-                    "path": path, "entity": None, "metric": label,
-                    "value": current[key], "limit": limit,
-                    "baseline": base.get(key), "warn": warn,
-                })
         base_funcs = base.get("functions", {})
-        for name, func in sorted(current["functions"].items()):
-            base_func = base_funcs.get(name, {})
-            for label, key, tkey in _FUNC_CHECKS:
-                value = func[key]
-                # `nesting` is `None` for a language never verified safe to
-                # trust lizard's nesting reader for (or an unmatched Python
-                # row) -- not checked at all, never checked against a wrong
-                # number.
-                if value is None:
-                    continue
-                warn = thresholds[tkey]["warn"]
-                limit = ceiling(base_func.get(key), warn)
-                if exceeds(value, limit):
-                    violations.append({
-                        "path": path, "entity": name, "metric": label,
-                        "value": value, "limit": limit,
-                        "baseline": base_func.get(key), "warn": warn,
-                    })
+        entities = [(None, current, base, _FILE_CHECKS)]
+        entities.extend((name, func, base_funcs.get(name, {}), _FUNC_CHECKS)
+                        for name, func in sorted(current["functions"].items()))
+        for entity, values, base_values, checks in entities:
+            violations.extend(
+                _entity_violations(path, entity, values, base_values, checks, thresholds))
     return violations
+
+
+def _entity_violations(path, entity, values, base_values, checks, thresholds):
+    """Every violation for one entity (a file, or one function in it)
+    against the checks that apply to it -- a violation or nothing per
+    check, same ceiling rule (`ceiling`/`exceeds`) either way."""
+    out = []
+    for label, key, tkey in checks:
+        value = values[key]
+        # `nesting` is `None` for a language never verified safe to trust
+        # lizard's nesting reader for (or an unmatched Python row) -- not
+        # checked at all, never checked against a wrong number. File checks
+        # never see `None` here, so this guards the function checks only.
+        if value is None:
+            continue
+        warn = thresholds[tkey]["warn"]
+        limit = ceiling(base_values.get(key), warn)
+        if exceeds(value, limit):
+            out.append({
+                "path": path, "entity": entity, "metric": label,
+                "value": value, "limit": limit,
+                "baseline": base_values.get(key), "warn": warn,
+            })
+    return out
 
 
 def report(violations):

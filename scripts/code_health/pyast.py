@@ -49,40 +49,15 @@ def analyze(repo_root, relpaths):
     params, symbols, errors = [], [], []
 
     for relpath in python_files:
-        current = module_name(relpath)
-        is_package = relpath.endswith("/__init__.py") or relpath == "__init__.py"
-        try:
-            source = (repo_root / relpath).read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source)
-        except (OSError, SyntaxError, ValueError) as exc:
-            errors.append({"file": relpath, "error": str(exc)})
-            graph.pop(current, None)
+        error, file_unresolved, file_params, file_symbols = _analyze_file(
+            repo_root, relpath, known, graph)
+        if error is not None:
+            errors.append(error)
+            graph.pop(module_name(relpath), None)
             continue
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    unresolved += _add_edge(graph, known, current, alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                target = _resolve_relative(current, is_package, node.level or 0,
-                                           node.module or "")
-                if node.level:
-                    # `from .b import x` may name a module or a symbol in b.
-                    hit = _add_edge(graph, known, current, target)
-                    for alias in node.names:
-                        _add_edge(graph, known, current, "%s.%s" % (target, alias.name))
-                    unresolved += hit
-                else:
-                    unresolved += _add_edge(graph, known, current, node.module or "")
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                params.append({"file": relpath, "function": node.name,
-                               "names": _param_names(node)})
-                symbols.append({"name": node.name, "file": relpath,
-                                "kind": "function",
-                                "tokens": _node_tokens(source, node)})
-            elif isinstance(node, ast.ClassDef):
-                symbols.append({"name": node.name, "file": relpath, "kind": "class",
-                                "tokens": _node_tokens(source, node)})
+        unresolved += file_unresolved
+        params.extend(file_params)
+        symbols.extend(file_symbols)
 
     return {
         "graph": {name: sorted(edges) for name, edges in graph.items()},
@@ -91,6 +66,58 @@ def analyze(repo_root, relpaths):
         "symbols": symbols,
         "errors": errors,
     }
+
+
+def _analyze_file(repo_root, relpath, known, graph):
+    """Parse one file and collect its import edges, params, and symbols.
+
+    Returns `(error, unresolved, params, symbols)`. On a parse failure,
+    `error` is the `{"file", "error"}` dict for the caller to record, and the
+    other three come back empty -- the caller is also responsible for
+    popping this file's module out of `graph`, since this helper never
+    touches `graph` on the failure path.
+    """
+    current = module_name(relpath)
+    is_package = relpath.endswith("/__init__.py") or relpath == "__init__.py"
+    try:
+        source = (repo_root / relpath).read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError, ValueError) as exc:
+        return {"file": relpath, "error": str(exc)}, 0, [], []
+
+    unresolved = 0
+    params, symbols = [], []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                unresolved += _add_edge(graph, known, current, alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            unresolved += _add_import_from(graph, known, current, is_package, node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params.append({"file": relpath, "function": node.name,
+                           "names": _param_names(node)})
+            symbols.append({"name": node.name, "file": relpath, "kind": "function",
+                            "tokens": _node_tokens(source, node)})
+        elif isinstance(node, ast.ClassDef):
+            symbols.append({"name": node.name, "file": relpath, "kind": "class",
+                            "tokens": _node_tokens(source, node)})
+    return None, unresolved, params, symbols
+
+
+def _add_import_from(graph, known, current, is_package, node):
+    """Resolve and record one `from X import ...` statement's edge(s).
+
+    Returns 1 when it points outside the repository (unresolved), else 0 --
+    same contract as `_add_edge`.
+    """
+    target = _resolve_relative(current, is_package, node.level or 0, node.module or "")
+    if not node.level:
+        return _add_edge(graph, known, current, node.module or "")
+    # `from .b import x` may name a module or a symbol in b.
+    hit = _add_edge(graph, known, current, target)
+    for alias in node.names:
+        _add_edge(graph, known, current, "%s.%s" % (target, alias.name))
+    return hit
 
 
 def _add_edge(graph, known, current, target):

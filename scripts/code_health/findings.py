@@ -1,6 +1,12 @@
 """Turn measured values into findings, and measured files into a summary."""
 
+from collections import namedtuple
+
 from . import config as _config
+
+# What a subject was measured at, against what it must stay under -- the
+# three numbers a rule check produces together, always used together.
+Measurement = namedtuple("Measurement", "metric value threshold")
 
 LAYER_NAMES = ("size", "dup", "imports", "dead", "churn", "derived")
 LAYER_DEPS = {"dup": ("size",), "derived": ("size", "churn")}
@@ -37,16 +43,25 @@ def resolve_layers(requested):
     return wanted
 
 
-def _finding(kind, level, subject_id, subject, metric, value, threshold, evidence):
+def _subject_id(subject):
+    """The finding id's subject half: a function's `file:function:start_line`
+    (the join key `sizes.py`/`pyast.py` use elsewhere), or a file's bare
+    path when there is no function."""
+    if "function" in subject:
+        return "%s:%s:%s" % (subject["file"], subject["function"], subject["start_line"])
+    return subject["file"]
+
+
+def _finding(kind, level, subject, measurement, evidence):
     return {
-        "id": "%s:%s" % (kind, subject_id),
+        "id": "%s:%s" % (kind, _subject_id(subject)),
         "kind": kind,
         "layer": "L2",
         "level": level,
         "subject": subject,
-        "metric": metric,
-        "value": value,
-        "threshold": threshold,
+        "metric": measurement.metric,
+        "value": measurement.value,
+        "threshold": measurement.threshold,
         "evidence": evidence,
     }
 
@@ -64,14 +79,12 @@ def size_findings(layer, cfg):
             if level is None:
                 continue
             out.append(_finding(
-                kind, level, row["path"], {"file": row["path"]}, tkey, value,
-                thresholds[tkey][level],
+                kind, level, {"file": row["path"]},
+                Measurement(tkey, value, thresholds[tkey][level]),
                 {"lines": row.get("lines"), "tokens": row.get("tokens")},
             ))
 
     for row in layer.get("functions", []):
-        subject_id = "%s:%s:%s" % (row["filename"], row["function_name"],
-                                   row["start_line"])
         subject = {
             "file": row["filename"],
             "function": row["function_name"],
@@ -91,8 +104,8 @@ def size_findings(layer, cfg):
             if level is None:
                 continue
             out.append(_finding(
-                kind, level, subject_id, subject, tkey, value,
-                thresholds[tkey][level],
+                kind, level, subject,
+                Measurement(tkey, value, thresholds[tkey][level]),
                 {"ccn": row.get("ccn"), "length": row.get("length"),
                  "param": row.get("param"), "nesting": row.get("nesting"),
                  "lexical_tokens": row.get("token")},
