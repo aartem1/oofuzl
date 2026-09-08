@@ -42,6 +42,49 @@ subprocess only, in this order: `$CODE_HEALTH_LIZARD` env override → `shutil.w
 `[sys.executable, "-m", "lizard"]` as a last resort (works when lizard was installed into the
 current interpreter's own environment rather than an isolated tool install).
 
+**The nesting column is not trustworthy for every language.** `lizard`'s nesting counter
+(`lizard_ext/lizardnd.py`) resets on a closing brace: it increments on every `if`/`for`/`while`/...
+token and decrements back to zero when it sees the reader's `bracket` token, `}` by default. That
+works for a brace/semicolon language, where a function's own closing brace guarantees the reset. It
+does **not** work for an indentation-based or `end`-keyword reader, which never emits that token —
+the counter climbs across every control-flow keyword in the function and then keeps climbing into
+every function that follows in the **same lizard invocation**, because nothing ever brings it back
+to zero. Verified directly, with a flat-vs-deep probe run against real `lizard -ENS --csv`:
+
+```
+python  5 sequential `if`s (function depth 1)  -> nesting=5   (should be 1)
+python  5 nested `if`s     (function depth 5)  -> nesting=5   (correct only by coincidence)
+ruby    3 trailing-`if`s   (function depth 1)  -> nesting=3   (should be 1)
+lua     5 sequential `if`/`then`/`end`         -> nesting=5   (should be 1)
+js      flat / 5-deep                          -> 1 / 5       (correct)
+c, c++, c#, java, go, kotlin, rust, swift,
+scala, php, objective-c    flat / 5-deep       -> 1 / 5       (correct, every one tested)
+```
+
+And it does not reset between files or functions in one invocation, because `measure.py` chunks its
+argv (`_ARG_CHUNK = 400`) and any real repository has more than one Python function in a chunk:
+
+```
+lizard -ENS --csv nest_flat.py nest_deep.py                -> 5, 10   (order-dependent)
+lizard -ENS --csv nest_deep.py nest_flat.py                -> 5, 10
+lizard -ENS --csv nest_flat.py nest_flat.py nest_flat.py    -> 5, 10, 15
+```
+
+For Python this is not a metric with an off-by-something error — it is a monotonically increasing
+counter whose final value depends on `argv` order. `code_health/sizes.py` (`_apply_nesting_source`)
+replaces it, for every `.py` function, with an exact value computed independently from the same AST
+`code_health/pyast.py` already parses (`pyast.measure_nesting`), joined to lizard's row by
+`(file, start_line)` — not by function name, because a nested or method function's name does not
+reliably agree between the two (lizard qualifies it, e.g. `outer.inner`; `ast` reports the bare
+`inner`), while `start_line` was verified to agree in every case tested, decorators and multi-line
+decorators included. `scripts/guard.py` carries an independent copy of the same AST pass, for the
+same reason it already carries its own CSV parser: it cannot import `code_health`.
+
+For every language *not* verified above (`.rb`, `.lua`, and anything else `sizes.py`/`guard.py` has
+not confirmed resets correctly), nesting is reported as `None` — "not measured" — rather than
+lizard's unverified, possibly-accumulating number. `None` never reaches the `>=` threshold
+comparison and never produces a `too_deep_nesting` finding; it is not silently treated as zero.
+
 ## `git log --numstat` — churn
 
 Invocation:

@@ -23,7 +23,7 @@ Sonar with `hard - 1` to reconcile the one-line off-by-one in exactly one place.
 | Cyclomatic complexity | `function_ccn` | 15 | 25 | L2 `lizard -ENS --csv` | McCabe cyclomatic complexity: count of independent linear paths through a function | More branches to trace means more paths the agent must consider correct simultaneously when changing the function; a wrong guess about one branch is a silent regression in another. |
 | Cognitive complexity | `function_cognitive` | 15 | 25 | L1 Sonar only (`S3776`) | Sonar's own measure of how hard a human finds a function to read, distinct from cyclomatic complexity (nesting and boolean-operator chains are weighted, straight-line branching is not) | Not measured without Sonar — CCN is reported instead, and labelled as CCN, never silently substituted for cognitive complexity under the same name. |
 | Parameters | `parameters` | 5 | 8 | L2 `lizard -ENS --csv` | Count of a function's declared parameters | A high parameter count is usually one implicit "context object" spread across positional arguments; the agent has to reconstruct that shape from every call site instead of reading it in one place. |
-| Nesting depth | `nesting` | 3 | 4 | L2 `lizard -ENS --csv` (requires `-ENS`) | Lizard's `max_nested_structures`: the deepest chain of nested blocks (`if`/`for`/`while`/`try`/…) in a function | Deep nesting means the condition under which a given line executes is the conjunction of everything above it; the agent has to hold the whole stack of conditions in mind to reason about one line. |
+| Nesting depth | `nesting` | 3 | 4 | L2, `lizard -ENS --csv` for a verified-correct language, own `ast` pass (`pyast.measure_nesting`) for Python, `None` ("not measured") otherwise | The deepest chain of nested blocks (`if`/`elif`/`else`, `for`, `while`, `with`, `try`/`except`/`finally`, `match`/`case`) enclosing a statement in a function | Deep nesting means the condition under which a given line executes is the conjunction of everything above it; the agent has to hold the whole stack of conditions in mind to reason about one line. |
 
 ### CCN versus cognitive complexity
 
@@ -34,6 +34,20 @@ weights nesting and boolean-operator chains more heavily than straight-line bran
 that those cost a human reader more than an equivalent flat `if`/`elif` chain does. Without Sonar,
 L2 never claims to report cognitive complexity — the scorecard says `not measured` for that row and
 reports CCN separately, labelled as CCN.
+
+### Nesting is not a single-source metric
+
+`lizard`'s own nesting reader is verified correct only for brace/semicolon languages (C, C++, C#,
+Java, JavaScript/TypeScript and their variants, Go, Kotlin, Rust, Swift, Scala, PHP, Objective-C) —
+its reset logic keys on a closing brace, which those readers all emit and Python's indentation-based
+reader and Ruby's/Lua's `end`-keyword readers never do. For those, lizard's column is not a
+per-function measurement at all: verified directly, a flat 5-sequential-`if` Python function reports
+nesting 5 (should be 1), and the counter does not reset between functions or files within one
+invocation either — three copies of one function in a single `lizard` call report 5, 10, 15. Python
+nesting is therefore computed by this plugin's own `ast` pass instead (`pyast.measure_nesting`,
+joined to lizard's row by file + start line), and every other unverified language reports `nesting:
+None` rather than a number nobody checked. The full reproduction and the per-language verification
+method are in `references/tools.md`.
 
 ### Token estimate is an estimate
 

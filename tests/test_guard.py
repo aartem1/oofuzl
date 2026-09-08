@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import subprocess
 import sys
@@ -13,6 +14,18 @@ GUARD = PLUGIN_ROOT / "scripts" / "guard.py"
 def run_guard(*args, cwd=None):
     return subprocess.run([sys.executable, str(GUARD)] + list(args),
                           capture_output=True, text=True, cwd=cwd)
+
+
+def load_guard():
+    """Import guard.py directly for unit tests of its internals (mirrors
+    tests/test_parser_agreement.py's loader)."""
+    spec = importlib.util.spec_from_file_location("vendored_guard_nesting", GUARD)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HAS_LIZARD = bool(load_guard().resolve_lizard())
 
 
 class RatchetTests(unittest.TestCase):
@@ -130,6 +143,70 @@ class BaselineTests(RatchetTests):
         data = json.loads(target.read_text())
         self.assertIn("a.py", data["files"])
         self.assertIn("f", data["files"]["a.py"]["functions"])
+
+
+class NestingTests(unittest.TestCase):
+    """guard.py's own standalone AST nesting pass (it cannot import
+    code_health). Reproduces, directly against guard's own code, the same
+    defect verified against real lizard: a flat 5-`if` function must not
+    report 5, and unmeasured languages must never fall back to lizard's
+    broken number."""
+
+    def setUp(self):
+        self.guard = load_guard()
+
+    def test_flat_python_function_is_depth_one(self):
+        source = "def flat(x):\n" + "".join(
+            "    if x == %d:\n        return %d\n" % (i, i) for i in range(5))
+        by_line = self.guard._python_nesting(source)
+        self.assertEqual(list(by_line.values()), [1])
+
+    def test_deep_python_function_is_depth_five(self):
+        source = (
+            "def deep(x):\n"
+            "    if x == 1:\n"
+            "        if x == 2:\n"
+            "            if x == 3:\n"
+            "                if x == 4:\n"
+            "                    if x == 5:\n"
+            "                        return 5\n"
+        )
+        by_line = self.guard._python_nesting(source)
+        self.assertEqual(list(by_line.values()), [5])
+
+    def test_syntax_error_returns_empty_not_fatal(self):
+        self.assertEqual(self.guard._python_nesting("def (:\n"), {})
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_measure_replaces_pythons_nesting(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "flat.py").write_text(
+            "def flat(x):\n" + "".join(
+                "    if x == %d:\n        return %d\n" % (i, i) for i in range(5)),
+            encoding="utf-8")
+        files, had_lizard = self.guard.measure(root, ["flat.py"], 4)
+        self.assertTrue(had_lizard)
+        self.assertEqual(files["flat.py"]["functions"]["flat"]["nesting"], 1)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_measure_reports_none_for_an_unverified_language(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "flat.rb").write_text(
+            "def flat(x)\n"
+            "  return 1 if x == 1\n"
+            "  return 0\n"
+            "end\n",
+            encoding="utf-8")
+        files, had_lizard = self.guard.measure(root, ["flat.rb"], 4)
+        self.assertTrue(had_lizard)
+        self.assertIsNone(files["flat.rb"]["functions"]["flat"]["nesting"])
+
+    def test_none_nesting_is_never_checked_and_never_crashes(self):
+        guard = self.guard
+        measured = {"a.rb": {"lines": 10, "tokens": 20, "functions": {
+            "f": {"lines": 5, "ccn": 1, "params": 1, "nesting": None}}}}
+        violations = guard.compare(measured, {"files": {}}, guard.DEFAULT_THRESHOLDS)
+        self.assertEqual(violations, [])
 
 
 class PerformanceTests(unittest.TestCase):

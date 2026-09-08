@@ -1,9 +1,12 @@
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
 from helpers import PLUGIN_ROOT, load_package
 
 load_package()
+from code_health import pyast as PA  # noqa: E402
 from code_health import sizes as S  # noqa: E402
 
 # Every numeric field holds a DISTINCT value on purpose. With coincidental
@@ -60,6 +63,48 @@ class ParserAgreementTests(unittest.TestCase):
                 C.level_for(value, threshold) is not None,
                 guard.exceeds(value, 400),
                 value)
+
+
+class NestingAgreementTests(unittest.TestCase):
+    """guard.py duplicates the nesting-depth AST pass for the same reason it
+    duplicates the CSV parser: it cannot import code_health. This is the
+    corresponding cross-check for that duplication."""
+
+    def test_guard_and_pyast_agree_on_a_flat_python_fixture(self):
+        source = "def flat(x):\n" + "".join(
+            "    if x == %d:\n        return %d\n" % (i, i) for i in range(5))
+        root = Path(tempfile.mkdtemp())
+        (root / "flat.py").write_text(source, encoding="utf-8")
+
+        guard = load_guard()
+        theirs = guard._python_nesting(source)
+        mine, errors = PA.measure_nesting(root, ["flat.py"])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
+        # Pin the actual number too: an agreement test that both sides get
+        # wrong the same way would still pass without this.
+        self.assertEqual(mine[0]["nesting"], 1)
+
+    def test_guard_and_pyast_agree_on_a_genuinely_nested_python_fixture(self):
+        source = (
+            "def deep(x):\n"
+            "    if x == 1:\n"
+            "        if x == 2:\n"
+            "            if x == 3:\n"
+            "                return 3\n"
+        )
+        root = Path(tempfile.mkdtemp())
+        (root / "deep.py").write_text(source, encoding="utf-8")
+
+        guard = load_guard()
+        theirs = guard._python_nesting(source)
+        mine, errors = PA.measure_nesting(root, ["deep.py"])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
+        self.assertEqual(mine[0]["nesting"], 3)
 
 
 if __name__ == "__main__":

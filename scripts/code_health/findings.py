@@ -80,6 +80,11 @@ def size_findings(layer, cfg):
         }
         for kind, tkey, rkey in _FUNC_RULES:
             value = row.get(rkey)
+            # `nesting` is `None` for a language sizes.py could not verify
+            # lizard's nesting reader for (and for an unmatched Python row);
+            # `None` never reaches `_config.level_for`, which would crash
+            # comparing it, and it never produces `too_deep_nesting` --
+            # "not measured" must never look like "zero".
             if value is None:
                 continue
             level = _config.level_for(value, thresholds[tkey])

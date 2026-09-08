@@ -100,7 +100,7 @@ the only place the off-by-one is handled.
 | cyclomatic complexity | `function_ccn` | 15 | 25 | n/a for Python — `S1541` exists for JS/Java only | L2 lizard |
 | cognitive complexity | `function_cognitive` | 15 | 25 | 15 (S3776, already active) | L1 Sonar only |
 | parameters | `parameters` | 5 | 8 | 13 (S107) | L2 lizard |
-| nesting depth | `nesting` | 3 | 4 | 4 (S134) | L2 lizard `-ENS` |
+| nesting depth | `nesting` | 3 | 4 | 4 (S134) | L2 lizard `-ENS` for a verified-correct language; own `ast` pass for Python; `None` otherwise (§5, `references/tools.md`) |
 
 Overridden per repository in `.code-health/config.json`.
 
@@ -270,6 +270,23 @@ Binary resolution order: `$CODE_HEALTH_LIZARD` → `shutil.which("lizard")` →
 `[sys.executable, "-m", "lizard"]`. On the calibration machine lizard is a `uv tool` isolated
 install: the CLI is on `PATH` but `import lizard` from the system interpreter fails. Never
 `import lizard`.
+
+**Nesting is not trusted from lizard for every language.** `lizard_ext/lizardnd.py` resets its
+nesting counter on a closing brace; this is correct for a brace/semicolon reader and never resets
+for an indentation-based or `end`-keyword one, because that token never appears. Verified directly
+against real `lizard -ENS --csv`: a flat, 5-sequential-`if` Python function reports nesting 5
+(should be 1), and the counter does not reset between functions or files in one invocation — three
+copies of one function in a single call report 5, 10, 15, in `argv` order. `sizes.py` replaces
+lizard's Python column with an exact value from `pyast.measure_nesting` (the same `ast` this design
+already parses for the import graph), joined to lizard's row by `(file, start_line)` rather than
+function name — a nested or method function's *name* does not reliably agree between the two readers
+(lizard qualifies it, e.g. `outer.inner`; `ast` reports the bare `inner`), while `start_line` was
+verified to agree in every case tested, including through decorators. Every language not verified
+correct this way (Ruby and Lua included — both confirmed broken by the same probe) reports
+`nesting: None`, never lizard's unverified number; `findings.py` and `guard.py` both treat `None` as
+"not measured", never as zero, and never compare it against a threshold. `guard.py` carries its own
+copy of the same `ast` pass, for the same reason it already carries its own CSV parser. Full
+reproduction: `references/tools.md`.
 
 ### L2 — exact clones
 

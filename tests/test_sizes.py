@@ -97,5 +97,87 @@ class LayerStatusTests(unittest.TestCase):
         self.assertEqual(layer["functions"][0]["function_name"], "f")
 
 
+class _Inv:
+    """Minimal stand-in for discovery's inventory -- just what measure_sizes
+    reads (`.source`, `.tests`)."""
+    def __init__(self, source):
+        self.source = source
+        self.tests = []
+
+
+@unittest.skipUnless(S.resolve_lizard(), "lizard not installed")
+class NestingSourceTests(unittest.TestCase):
+    """The actual defect, exercised end-to-end through measure_sizes, which
+    is what a real audit run calls. Reproduced directly with real lizard
+    before any of this was written:
+
+        lizard -ENS --csv nest_flat.py            -> nesting=5, should be 1
+        lizard -ENS --csv nest_flat.py x3 in argv  -> nesting=5, 10, 15
+    """
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.cfg = C.load_config(self.root)
+
+    def test_python_nesting_is_replaced_not_lizards_accumulating_value(self):
+        (self.root / "flat.py").write_text(
+            "def flat(x):\n" + "".join(
+                "    if x == %d:\n        return %d\n" % (i, i) for i in range(5)),
+            encoding="utf-8")
+        # The same file three times in one call is exactly the shape that
+        # exposes lizard's cross-function accumulation (5, 10, 15 in argv
+        # order); the fix must give the same, correct answer every time.
+        layer = S.measure_sizes(self.root, _Inv(["flat.py", "flat.py", "flat.py"]), self.cfg)
+        self.assertEqual([row["nesting"] for row in layer["functions"]], [1, 1, 1])
+        self.assertEqual(layer["nesting_source"]["python_matched"], 3)
+        self.assertEqual(layer["nesting_source"]["python_unmatched"], 0)
+
+    def test_genuinely_deep_python_function_is_five(self):
+        (self.root / "deep.py").write_text(
+            "def deep(x):\n"
+            "    if x == 1:\n"
+            "        if x == 2:\n"
+            "            if x == 3:\n"
+            "                if x == 4:\n"
+            "                    if x == 5:\n"
+            "                        return 5\n",
+            encoding="utf-8")
+        layer = S.measure_sizes(self.root, _Inv(["deep.py"]), self.cfg)
+        self.assertEqual(layer["functions"][0]["nesting"], 5)
+
+    def test_brace_language_keeps_lizards_value(self):
+        (self.root / "deep.js").write_text(
+            "function deep(x) {\n"
+            "    if (x === 1) {\n"
+            "        if (x === 2) {\n"
+            "            if (x === 3) {\n"
+            "                return 3;\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n",
+            encoding="utf-8")
+        layer = S.measure_sizes(self.root, _Inv(["deep.js"]), self.cfg)
+        self.assertEqual(layer["functions"][0]["nesting"], 3)
+        self.assertEqual(layer["nesting_source"]["kept_from_lizard"], 1)
+
+    def test_unverified_language_reports_none_not_lizards_number(self):
+        # Ruby's trailing-`if` modifier form was verified broken the same
+        # way Python's is: `lizard -ENS --csv` reports 3 for a flat
+        # 3-trailing-`if` function that is not nested at all.
+        (self.root / "flat.rb").write_text(
+            "def flat(x)\n"
+            "  return 1 if x == 1\n"
+            "  return 2 if x == 2\n"
+            "  return 3 if x == 3\n"
+            "  return 0\n"
+            "end\n",
+            encoding="utf-8")
+        layer = S.measure_sizes(self.root, _Inv(["flat.rb"]), self.cfg)
+        self.assertIsNone(layer["functions"][0]["nesting"])
+        self.assertEqual(layer["nesting_source"]["not_measured"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

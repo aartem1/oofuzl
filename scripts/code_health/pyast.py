@@ -168,6 +168,147 @@ def find_cycles(graph):
     return sorted(result)
 
 
+##
+## Exact nesting depth, from the same AST -- no lizard involved.
+##
+## `lizard -ENS`'s own nesting counter keys its reset on a closing brace
+## (`bracket = '}'`, from `lizard_ext/lizardnd.py`'s per-reader defaults).
+## Every brace/semicolon language reader tested resets correctly on it.
+## Python's indentation-based reader never emits that token, so the counter
+## never resets: it climbs across every `if`/`for`/`while`/... in a function
+## and keeps climbing into every function that follows in the SAME lizard
+## invocation. Verified directly: 5 sequential (unnested) `if`s report
+## nesting 5 instead of 1, and three copies of that one function in a single
+## `lizard --csv a.py a.py a.py` report 5, 10, 15 -- a monotonically
+## increasing counter, not a per-function measurement. `sizes.py` uses
+## `measure_nesting` below to replace lizard's Python column with this one.
+##
+
+_NESTING_STMTS = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try)
+if hasattr(ast, "TryStar"):     # 3.11+, `except*`
+    _NESTING_STMTS = _NESTING_STMTS + (ast.TryStar,)
+if hasattr(ast, "Match"):       # 3.10+, `match`/`case`
+    _NESTING_STMTS = _NESTING_STMTS + (ast.Match,)
+
+
+def _if_depth(node, depth):
+    """One `if`/`elif`/`else` chain is one nesting level, not one per branch.
+
+    `elif` has no AST node of its own: `if a: ..\nelif b: ..` and
+    `if a: ..\nelse:\n    if b: ..` produce the identical
+    `If(orelse=[If(...)])` shape, so the two cannot be told apart from the
+    tree alone. Both are treated as continuing the same chain -- staying at
+    `depth`, not `depth + 1` -- matching how a human reads an
+    if/elif/.../else ladder as a single decision. This is the same
+    "else-if" exception `lizardnd.py` carves out for brace languages
+    (`prev_was_else`), applied here at the AST level instead of the token
+    level, and it means a genuine `else:` block with unrelated nested `if`
+    written at the same indentation as an `elif` is indistinguishable from
+    one and is treated the same way -- an inherent ambiguity of the
+    grammar, not a gap in this pass.
+    """
+    deepest = _max_depth(node.body, depth + 1)
+    orelse = node.orelse
+    if len(orelse) == 1 and isinstance(orelse[0], ast.If):
+        deepest = max(deepest, _if_depth(orelse[0], depth))
+    elif orelse:
+        deepest = max(deepest, _max_depth(orelse, depth + 1))
+    return deepest
+
+
+def _stmt_bodies(node):
+    """Every statement list one nesting construct can hold, each at the
+    SAME depth as its siblings: an `except`/`else`/`finally` clause is not
+    an additional level beyond its `try`, and one `case` is not additional
+    beyond its `match` -- matching the task's grouping of
+    `try/except/finally` and `match/case` as single constructs."""
+    if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+        bodies = [node.body]
+        if node.orelse:
+            bodies.append(node.orelse)
+        return bodies
+    if isinstance(node, ast.Try) or (hasattr(ast, "TryStar") and isinstance(node, ast.TryStar)):
+        bodies = [node.body] + [handler.body for handler in node.handlers]
+        if node.orelse:
+            bodies.append(node.orelse)
+        if node.finalbody:
+            bodies.append(node.finalbody)
+        return bodies
+    if hasattr(ast, "Match") and isinstance(node, ast.Match):
+        return [case.body for case in node.cases]
+    return [node.body]     # With / AsyncWith
+
+
+def _max_depth(stmts, depth):
+    """Deepest nesting depth reached inside `stmts`, starting at `depth`.
+
+    Does not descend into a nested function or class definition at all --
+    each is walked separately by its own top-level call (see
+    `measure_nesting`), starting back at depth 0. A nested function's depth
+    is its own, never inherited from its parent's.
+    """
+    deepest = depth
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, ast.If):
+            deepest = max(deepest, _if_depth(stmt, depth))
+        elif isinstance(stmt, _NESTING_STMTS):
+            for body in _stmt_bodies(stmt):
+                deepest = max(deepest, _max_depth(body, depth + 1))
+    return deepest
+
+
+def max_nesting(node):
+    """A function's own maximum nesting depth: `if`/`elif`/`else`, `for`,
+    `while`, `with`, `try`/`except`/`finally`, `match`/`case`, each enclosing
+    a statement, add one level. A function body at depth 0 containing one
+    `if` has depth 1; a lone `if` sequence of any length that never nests
+    also has depth 1 -- unlike lizard's Python reader, this does not count
+    the number of `if` keywords."""
+    return _max_depth(node.body, 0)
+
+
+def measure_nesting(repo_root, relpaths):
+    """Per-function exact nesting depth for every `.py` path in `relpaths`.
+
+    Returns `(rows, errors)`. Each row is
+    `{"file", "function", "start_line", "end_line", "nesting"}`; `start_line`
+    is `node.lineno`, the `def`/`async def` line itself -- verified to be
+    what lizard also reports as `start_line` for a decorated function
+    (including a multi-line decorator), so it is the reliable half of the
+    join key `sizes.py` uses against lizard's rows. `function` is the bare
+    name ast gives a nested function or method (`wrapper`, not lizard's
+    qualified `outer.wrapper`), so it is NOT part of that join key -- name
+    qualification is exactly where the two disagree.
+
+    Independent of `analyze`/the import graph on purpose: `sizes.py` needs
+    this even when the `imports` layer was never requested, and should not
+    pay for building a graph it does not use to get it.
+    """
+    repo_root = Path(repo_root)
+    rows, errors = [], []
+    for relpath in relpaths:
+        if not relpath.endswith(".py"):
+            continue
+        try:
+            source = (repo_root / relpath).read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source)
+        except (OSError, SyntaxError, ValueError) as exc:
+            errors.append({"file": relpath, "error": str(exc)})
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                rows.append({
+                    "file": relpath,
+                    "function": node.name,
+                    "start_line": node.lineno,
+                    "end_line": getattr(node, "end_lineno", node.lineno),
+                    "nesting": max_nesting(node),
+                })
+    return rows, errors
+
+
 def measure_imports(repo_root, inventory, cfg):
     relpaths = list(inventory.source) + list(inventory.tests)
     if not any(p.endswith(".py") for p in relpaths):

@@ -51,6 +51,18 @@ class SizeFindingTests(unittest.TestCase):
         self.assertEqual(hit[0]["level"], "hard")
         self.assertEqual(hit[0]["value"], 8)
 
+    def test_none_nesting_produces_no_finding_and_does_not_crash(self):
+        # sizes.py sets nesting=None for a language it never verified
+        # lizard's nesting reader for (or an unmatched Python row); this
+        # must never be silently treated as zero, and must never reach the
+        # >= comparison that would crash on None.
+        layer = {"files": [], "functions": [{
+            "filename": "a.rb", "function_name": "f", "param": 1, "ccn": 1,
+            "length": 3, "nesting": None, "start_line": 1, "end_line": 3, "token": 10,
+        }]}
+        out = F.size_findings(layer, self.cfg)
+        self.assertFalse(any(f["kind"] == "too_deep_nesting" for f in out))
+
 class SummaryTests(unittest.TestCase):
     def setUp(self):
         self.cfg = C.load_config(Path(tempfile.mkdtemp()))

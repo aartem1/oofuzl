@@ -18,6 +18,7 @@ stashes unstaged changes, so reading from disk reads the staged content.
 """
 
 import argparse
+import ast
 import csv
 import fnmatch
 import io
@@ -53,6 +54,101 @@ FUNC_FIELDS = ("nloc", "ccn", "token", "param", "length", "location",
                "end_line", "nesting")
 _INT_FIELDS = {"nloc", "ccn", "token", "param", "length", "start_line",
                "end_line", "nesting"}
+
+# Extensions whose lizard reader was verified, with a flat-vs-deep probe, to
+# reset its nesting counter correctly (see code_health/sizes.py and
+# references/tools.md for the full verification). Every other extension,
+# `.py` included, never keeps lizard's raw nesting number.
+_LIZARD_NESTING_OK_EXT = {
+    ".c", ".h", ".cpp", ".cc", ".hpp",
+    ".cs", ".java",
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".go", ".kt", ".rs", ".swift", ".scala", ".php",
+    ".m", ".mm",
+}
+
+# Same nesting-depth pass as code_health/pyast.py, duplicated on purpose --
+# this file never imports code_health, the same reason the CSV parser above
+# is duplicated rather than shared. Keep the two in sync; the parser
+# agreement test (tests/test_parser_agreement.py) checks they still agree.
+_NESTING_STMTS = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith, ast.Try)
+if hasattr(ast, "TryStar"):     # 3.11+, `except*`
+    _NESTING_STMTS = _NESTING_STMTS + (ast.TryStar,)
+if hasattr(ast, "Match"):       # 3.10+, `match`/`case`
+    _NESTING_STMTS = _NESTING_STMTS + (ast.Match,)
+
+
+def _if_depth(node, depth):
+    """One `if`/`elif`/`else` chain is one nesting level, not one per branch
+    -- `elif` has no AST node of its own (see code_health/pyast.py)."""
+    deepest = _max_depth(node.body, depth + 1)
+    orelse = node.orelse
+    if len(orelse) == 1 and isinstance(orelse[0], ast.If):
+        deepest = max(deepest, _if_depth(orelse[0], depth))
+    elif orelse:
+        deepest = max(deepest, _max_depth(orelse, depth + 1))
+    return deepest
+
+
+def _stmt_bodies(node):
+    """Every statement list one nesting construct can hold, each at the
+    SAME depth as its siblings (an `except`/`else`/`finally` clause is not
+    additional beyond its `try`; one `case` is not additional beyond its
+    `match`)."""
+    if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+        bodies = [node.body]
+        if node.orelse:
+            bodies.append(node.orelse)
+        return bodies
+    if isinstance(node, ast.Try) or (hasattr(ast, "TryStar") and isinstance(node, ast.TryStar)):
+        bodies = [node.body] + [handler.body for handler in node.handlers]
+        if node.orelse:
+            bodies.append(node.orelse)
+        if node.finalbody:
+            bodies.append(node.finalbody)
+        return bodies
+    if hasattr(ast, "Match") and isinstance(node, ast.Match):
+        return [case.body for case in node.cases]
+    return [node.body]     # With / AsyncWith
+
+
+def _max_depth(stmts, depth):
+    """Deepest nesting depth inside `stmts`, starting at `depth`. Does not
+    descend into a nested function/class -- each gets its own top-level
+    call in `_python_nesting`, starting back at depth 0."""
+    deepest = depth
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(stmt, ast.If):
+            deepest = max(deepest, _if_depth(stmt, depth))
+        elif isinstance(stmt, _NESTING_STMTS):
+            for body in _stmt_bodies(stmt):
+                deepest = max(deepest, _max_depth(body, depth + 1))
+    return deepest
+
+
+def max_nesting(node):
+    """A function's own maximum nesting depth; see code_health/pyast.py for
+    the full rationale -- this is the same algorithm."""
+    return _max_depth(node.body, 0)
+
+
+def _python_nesting(source):
+    """`{start_line: nesting}` for every function `ast.walk` finds in
+    `source`. Empty on a syntax error: guard never fails a commit just
+    because a file it is checking cannot be parsed here either -- any
+    lizard row for it simply comes back unmatched, i.e. `nesting = None`,
+    same as any other row this map does not cover."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return {}
+    return {
+        node.lineno: max_nesting(node)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
 
 def parse_lizard_csv(text):
@@ -128,6 +224,7 @@ def settings_for(repo_root):
 def measure(repo_root, relpaths, chars_per_token):
     repo_root = Path(repo_root)
     files = {}
+    python_nesting = {}
     for rel in relpaths:
         try:
             text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
@@ -138,6 +235,8 @@ def measure(repo_root, relpaths, chars_per_token):
             "tokens": int(math.ceil(len(text) / float(chars_per_token))),
             "functions": {},
         }
+        if rel.endswith(".py"):
+            python_nesting[rel] = _python_nesting(text)
     argv = resolve_lizard()
     if argv is None or not files:
         return files, argv is not None
@@ -147,9 +246,21 @@ def measure(repo_root, relpaths, chars_per_token):
         entry = files.get(row["filename"])
         if entry is None:
             continue
+        ext = Path(row["filename"]).suffix
+        if ext == ".py":
+            # Lizard's own Python nesting column is a monotonically
+            # increasing counter across the whole invocation (verified in
+            # sizes.py / references/tools.md), never trusted here. A row
+            # whose start line has no match in `_python_nesting` (should be
+            # rare; see pyast.measure_nesting) is `None`, not a guess.
+            nesting = python_nesting.get(row["filename"], {}).get(row["start_line"])
+        elif ext in _LIZARD_NESTING_OK_EXT:
+            nesting = row["nesting"]
+        else:
+            nesting = None
         entry["functions"][row["function_name"]] = {
             "lines": row["length"], "ccn": row["ccn"],
-            "params": row["param"], "nesting": row["nesting"],
+            "params": row["param"], "nesting": nesting,
         }
     return files, True
 
@@ -194,12 +305,19 @@ def compare(measured, baseline, thresholds):
         for name, func in sorted(current["functions"].items()):
             base_func = base_funcs.get(name, {})
             for label, key, tkey in _FUNC_CHECKS:
+                value = func[key]
+                # `nesting` is `None` for a language never verified safe to
+                # trust lizard's nesting reader for (or an unmatched Python
+                # row) -- not checked at all, never checked against a wrong
+                # number.
+                if value is None:
+                    continue
                 warn = thresholds[tkey]["warn"]
                 limit = ceiling(base_func.get(key), warn)
-                if exceeds(func[key], limit):
+                if exceeds(value, limit):
                     violations.append({
                         "path": path, "entity": name, "metric": label,
-                        "value": func[key], "limit": limit,
+                        "value": value, "limit": limit,
                         "baseline": base_func.get(key), "warn": warn,
                     })
     return violations
