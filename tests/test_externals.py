@@ -50,6 +50,22 @@ class GracefulAbsenceTests(unittest.TestCase):
             if not state["available"]:
                 self.assertTrue(state["reason"], name)
 
+    def test_a_vulture_that_cannot_parse_a_file_does_not_claim_measured(self):
+        # vulture exits 1 for both "found dead code" and "error"; only stderr
+        # separates them. Reporting `measured` with zero symbols after a failure
+        # is a confident "nothing found" that is indistinguishable from a real
+        # clean run.
+        root = Path(tempfile.mkdtemp())
+        (root / "bad.py").write_text("def (:\n", encoding="utf-8")
+        cfg = C.load_config(root)
+        inv = D.enumerate_files(root, cfg)
+        state = EX.probe("vulture")
+        if not state["available"]:
+            self.skipTest("vulture not installed")
+        out = EX.run_dead(root, inv, {"vulture": state, "knip": self.ABSENT})
+        self.assertEqual(out["status"], "partial")
+        self.assertIn("vulture", out["reason"])
+
 
 class MergeTests(unittest.TestCase):
     def test_madge_result_extends_the_python_layer(self):

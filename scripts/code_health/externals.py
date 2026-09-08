@@ -178,8 +178,23 @@ def run_dead(repo_root, inventory, tool_states):
     vulture = tool_states.get("vulture", {})
     if py and vulture.get("available"):
         proc = _run([vulture.get("bin", "vulture"), "--min-confidence", "80"] + py,
-                    timeout=600, cwd=str(repo_root))
-        if proc is not None:
+                    cwd=str(repo_root), timeout=600)
+        # vulture exits 1 for BOTH "found dead code" and "error", so the return
+        # code alone cannot tell them apart -- stderr is the discriminator.
+        # Verified: clean -> rc 0, empty stderr; dead code found -> rc 1, empty
+        # stderr; syntax error or missing file -> rc 1 WITH stderr.
+        # Without this, a failing tool reports `measured` with zero symbols,
+        # which is indistinguishable from "ran clean, found nothing" -- the one
+        # thing every other layer in this design refuses to do.
+        if proc is None:
+            reasons.append("vulture did not run")
+        elif proc.returncode not in (0, 1):
+            reasons.append("vulture failed (exit %d): %s"
+                           % (proc.returncode, (proc.stderr or "").strip()[:200]))
+        else:
+            if (proc.stderr or "").strip():
+                reasons.append("vulture could not analyze every file: %s"
+                               % (proc.stderr or "").strip()[:200])
             measured.append("python")
             findings.extend(_parse_vulture(proc.stdout))
     elif py:
