@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = PLUGIN_ROOT.parents[1]
+# This repository ships one plugin at its root, so the plugin root and the
+# repository root are the same directory. In `personal_ai_tools`, where this
+# plugin used to live under `plugins/code-health/`, they were two levels apart.
+REPO_ROOT = PLUGIN_ROOT
 NAME = "code-health"
 
 
@@ -42,18 +45,14 @@ class PluginLayoutTests(unittest.TestCase):
     def test_the_claude_marketplace_points_at_this_plugin_at_this_version(self):
         entry = marketplace_entry(".claude-plugin/marketplace.json", NAME)
         self.assertIsNotNone(entry, "code-health is not listed in the Claude marketplace")
-        self.assertEqual(entry["source"], "./plugins/%s" % NAME)
+        self.assertEqual(entry["source"], "./")
         self.assertEqual(entry["version"],
                          plugin_manifest(".claude-plugin/plugin.json")["version"])
 
     def test_the_codex_marketplace_points_at_this_plugin(self):
         entry = marketplace_entry(".agents/plugins/marketplace.json", NAME)
         self.assertIsNotNone(entry, "code-health is not listed in the Codex marketplace")
-        self.assertEqual(entry["source"]["path"], "./plugins/%s" % NAME)
-
-    def test_the_cursor_marketplace_does_not_ship_this_plugin(self):
-        # Deliberate: code-health's skills are Claude/Codex Agent Skills.
-        self.assertIsNone(marketplace_entry(".cursor-plugin/marketplace.json", NAME))
+        self.assertEqual(entry["source"]["path"], "./")
 
     @unittest.skipUnless(shutil.which("claude"), "the claude CLI is not installed")
     def test_claude_plugin_validate_passes(self):
@@ -61,7 +60,7 @@ class PluginLayoutTests(unittest.TestCase):
         # fields) into exit 1. This is why there is no hand-rolled frontmatter
         # test: the real validator covers more and stays correct as it evolves.
         out = subprocess.run(
-            ["claude", "plugin", "validate", "plugins/%s" % NAME, "--strict"],
+            ["claude", "plugin", "validate", ".", "--strict"],
             cwd=REPO_ROOT, capture_output=True, text=True,
         )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)

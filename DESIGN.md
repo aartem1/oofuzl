@@ -1030,7 +1030,8 @@ Russian, matching the current one. `README.md` and `DESIGN.md` are English, matc
 - Commands become `/code-health:audit`, `/code-health:fix`, `/code-health:guard`. Codex keeps
   `$audit` / `$fix` / `$guard`.
 - Cost: one reinstall. `/plugin uninstall sonar-code-health` then
-  `/plugin install code-health@artem-personal-tools`. Accepted.
+  `/plugin install code-health@oofuzl`. Accepted. (The plugin subsequently moved out of
+  `personal_ai_tools` into its own repository; §14 records the rename, not the move.)
 - State moves from `~/.local/state/sonar-code-health/` to `~/.local/state/code-health/`. No
   migration: the ledger is disposable and a fresh audit regenerates it. `audit` mentions the old
   directory once if it exists, so the user can delete it.

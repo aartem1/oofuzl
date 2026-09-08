@@ -5,7 +5,7 @@
   "author": {
     "name": "Artem"
   },
-  "repository": "https://github.com/aartem1/personal_ai_tools",
+  "repository": "https://github.com/aartem1/oofuzl",
   "skills": "./skills/",
   "interface": {
     "displayName": "Code Health",

@@ -13,6 +13,15 @@ fix    →  burns ledger entries, one or as a queue, with the project's own test
 guard  →  freezes the current state as a baseline and refuses commits that make it worse
 ```
 
+## Install
+
+```text
+/plugin marketplace add aartem1/oofuzl
+/plugin install code-health@oofuzl
+```
+
+Codex reads the same repository through [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json).
+
 ## Commands
 
 | Purpose | Claude Code | Codex |
