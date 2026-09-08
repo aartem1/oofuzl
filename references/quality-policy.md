@@ -105,6 +105,51 @@ The agent may add at most three observations outside Sonar when they are high-co
 
 Do not turn the audit into an unconstrained subjective code review. If a claim cannot be supported by concrete repository evidence, omit it.
 
+## Agent-ergonomics metrics
+
+Three L2/L3 metrics exist because they cost an *agent* specifically, not because a human style
+guide asks for them. Report them under their own "Agent ergonomics" section, not folded into the
+Sonar-shaped groups below.
+
+- **Token cost** (`file_tokens`). `chars / chars_per_token` over a file's UTF-8 text — an estimate,
+  never a tokenizer's own count. A file that fits a human's scroll wheel can still fail to fit in a
+  model's context window; the largest file measured by hand was 8974 lines ≈ 107k tokens, invisible
+  to every Sonar rule because none of `S138`/`S104`/`S134` is active in a built-in profile (see
+  `references/sonar.md`).
+- **Symbol collisions** (`symbol_collision`). The same function or class name defined in several
+  files. A human reading one call site already knows which file they are in; an agent that greps a
+  name and gets N hits has to disambiguate from scratch every time, and silently picking the wrong
+  definition is a correctness bug the agent will not notice it made.
+- **Churn × complexity** (`hotspot`) and **edit fan-out** (`edit_fanout`). Complexity in a file
+  nobody has touched in six months is not urgent; the same complexity in a file changed 40 times is
+  — an agent asked to change it is working in the most failure-prone part of the repository, not an
+  arbitrary one. Fan-out is a ratio against the repository's own median commit size, not a raw
+  count, because the raw count is dominated by the team's commit-size habits rather than by the
+  file: editing a file whose edits routinely drag in more than a typical commit (`ratio > 1`) is
+  itself a design smell an agent cannot fix by writing better code in isolation.
+
+**These three never form their own ledger group.** Hotspots, fan-out, and symbol collisions
+re-rank the groups above instead — a `Fix first` entry's priority moves because of them, and they
+appear as evidence inside that group's `why`, never as a standalone "hotspot" or "fan-out" work
+item with its own remediation.
+
+## Dead code grouping
+
+Group `dead_symbol` findings by their owning module or package, never repository-wide — "24
+unreferenced helpers in `legacy/`" is one group, not one finding per helper and not one group for
+the whole repository regardless of package boundaries. Both `vulture` and `knip` have known false
+positives on dynamic dispatch, so a `dead_symbol` group is capped at **P2** even when the count is
+large: a static-analysis "unreferenced" verdict is evidence to inspect, not proof of the kind a P0
+or P1 verdict requires elsewhere.
+
+## The Sonar-less ceiling
+
+A Sonar-less audit can **structurally never raise a P0**. The P0 tier is defined by
+correctness/reliability/security evidence, and only L1 (Sonar) produces that evidence — L2/L3
+measure size, duplication, import structure, dead code, and churn, none of which is itself a
+correctness or security finding. When `L1: not_measured`, say so plainly in the report rather than
+implying the repository has no P0: the true answer is "not measured", not "none found".
+
 ## Human-facing language
 
 Translate scanner terminology into consequences.

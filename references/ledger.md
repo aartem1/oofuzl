@@ -1,0 +1,87 @@
+# The debt ledger
+
+Shared by all three skills: `audit` writes it, `fix` reads and updates it, `guard` does not touch it
+(the ratchet has its own, separate baseline — `.code-health/baseline.json` inside the target repo,
+not this file).
+
+## Location
+
+```
+${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json
+```
+
+**Outside the target repository.** It is machine-specific and holds Sonar host/analysis keys —
+data that has no business being committed to the repository it describes, and that would be wrong
+for a second machine or a second contributor to inherit verbatim.
+
+## Schema
+
+```jsonc
+{
+  "schema": 1,
+  "project_key": "github:owner:repo",
+  "repo_path": "/abs/path",
+  "audit": {
+    "at": "2026-09-08T10:00:00Z", "head": "abc123", "dirty": false, "branch": "main",
+    "layers": { "L1": "measured", "L2": "measured", "L3": "partial" },
+    "summary": { /* verbatim copy of measure.py's summary -- the repo-wide anti-gaming baseline */ },
+    "sonar": { "host": "http://localhost:9000", "analysis_key": "...", "revision": "abc123",
+               "profile": "Code Health — github:owner:repo" }
+  },
+  "groups": [
+    { "gid": "nd-7f3a91c4", "label": "A1", "priority": "P1",
+      "title": "Quarterly cache protocol copied into 16 files",
+      "why": "One change to the cache contract needs 16 coordinated edits; the cluster sits in the top churn decile",
+      "kind": "near_duplicate", "layer": "L2",
+      "finding_ids": ["near_duplicate:cluster/7f3a91c4"],
+      "files": ["..."], "functions": ["file.py:compute_summary_payload"],
+      "sonar_issue_keys": [], "rule_keys": [],
+      "metric": { "name": "near_duplicate", "worst": 0.91, "threshold": 0.60, "count": 16 },
+      "remediation": "Extract one cache-protocol module; the 16 call sites become thin adapters." }
+  ],
+  "queue": {
+    "created_at": "...",
+    "gate": { "command": "make gate", "detected_from": "Makefile target `gate`", "confirmed_at": "..." },
+    "baseline_summary": { /* snapshot at cycle start, for repo-wide anti-gaming */ },
+    "items": [
+      { "gid": "nd-7f3a91c4", "state": "done", "commit": "def456",
+        "started_at": "...", "finished_at": "...", "note": "" },
+      { "gid": "cx-2b81ee07", "state": "pending" }
+    ]
+  }
+}
+```
+
+## Group identity: `gid` versus `label`
+
+`gid` is **content-derived**: `"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`. `label`
+(`A1…An`) is a **display convenience only** — a fresh, priority-ordered assignment made by every
+`audit` run, not a stable identifier.
+
+**The queue stores `gid`, never `label`.** Positional labels plus a preserved queue across audits is
+silent data corruption: after a re-audit reshuffles priority order, a pending `A5` from before the
+re-audit now points at whichever group happens to be fifth *this time* — a different problem
+entirely — and the intended safeguard ("report if the referenced group no longer exists") never
+fires, because `A5` still exists; it is simply not the group it used to be. With content-derived
+`gid`, a group that genuinely disappeared between audits is detectable as a missing key, and is
+reported as such rather than silently substituted.
+
+## Queue item state and `running` recovery
+
+`state` is one of `pending | running | done | failed | skipped`.
+
+An item found in state `running` at the start of a `--resume` belonged to a session that crashed or
+was killed mid-item — it did not finish normally, because a normal finish always transitions to
+`done`, `failed`, or `skipped` before the process exits. `--resume` must never silently retry or
+silently skip such an item: it is reported to the user, its files are checked for uncommitted
+changes left behind by the crashed attempt, and the user chooses retry or skip. Guessing either way
+on the user's behalf is the one thing this state exists to prevent.
+
+## Locator, not source of truth
+
+The ledger never stores source snippets, tokens, credentials, or raw API response dumps — only
+locators: file paths, function names, finding ids, metric values, and Sonar issue/rule keys. It is a
+**locator, not a source of truth**: `fix` always re-measures the group's files before editing rather
+than trusting the ledger's snapshot values, because the repository may have changed since the audit
+that wrote them (including via an earlier item in the same queue). One file per project; each audit
+overwrites it, carrying forward whatever `queue` was not yet fully done.

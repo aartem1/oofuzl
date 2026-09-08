@@ -145,7 +145,80 @@ scanner image runs as a non-root user, so ownership must be set for the scanner'
 fails immediately with `AccessDeniedException` on its cache directory. None of this is a substitute
 for running natively when the architecture does not match.
 
-For a first audit, keep the installed/default `Sonar way` quality profiles unless the project already has an intentional profile. Do not tune global rules or thresholds merely to make one repository pass.
+## Quality profile
+
+Creating the profile is what turns L1 from misleading into useful. `S138` (function length),
+`S104` (file length), and `S134` (nesting) exist in every edition and are `status=READY` with sane
+defaults (Python: 100 / 1000 / 4), but they are **not active** in any built-in profile — neither
+`Sonar way` nor the newer `Sonar agentic AI` — and built-in profiles are `isBuiltIn=true`, read-only,
+applied to every language by default. `Sonar agentic AI` is not a substitute: it activates none of
+`S138`/`S104`/`S134` either — it is a different axis, about code an agent is likely to generate
+badly, not about code an agent is likely to fail to read. Verified on a real repository: of 114
+functions with ≥8 parameters, `Sonar way` reported 7; of 22 files ≥1000 lines it reported none.
+
+**Permission.** `create`, `change_parent`, `activate_rule`, and `add_project` all require
+**Administer Quality Profiles**. A token minted through the ordinary local-token setup above can
+403 on this. On 403 do **not** fail the audit: fall back to the built-in `Sonar way` profile, mark
+`L1: partial`, and print the reason plus the permission needed. That fallback is the honest state —
+Sonar's blind spots are then real ones, not a plugin bug.
+
+**Extend, do not copy.** `POST /api/qualityprofiles/copy` produces a detached snapshot that never
+picks up rules added by later SonarQube upgrades, and its `toName` parameter is documented as the
+name for a *new* profile — the call is not idempotent. Use instead:
+
+1. `GET /api/qualityprofiles/search?language=<lang>&qualityProfile=<name>` — existence check.
+2. If absent: `POST /api/qualityprofiles/create`, then `POST /api/qualityprofiles/change_parent`
+   with the built-in `Sonar way` profile as parent. Inheritance means later upstream rule additions
+   arrive on their own, which a `copy` snapshot would never see.
+3. `POST /api/qualityprofiles/activate_rule` for the four rules below.
+4. `POST /api/qualityprofiles/add_project` binds this project only. Global/server defaults never
+   change, and no other project is affected.
+
+**One profile per project**, named `Code Health — <project-key>`. A single shared
+`Code Health (agent)` profile would be server-global while thresholds are per-repository
+(`.code-health/config.json`): reconciling one repository's config would silently change what
+another repository's audit measures. The tradeoff, accepted: one profile accumulates per audited
+repository on the server.
+
+**Rules activated, at `hard - 1`.** `references/metrics.md` defines the plugin's own comparison
+semantics as `value >= threshold`; Sonar's rule parameters fire at `value > max`. Configuring Sonar
+with `hard - 1` reconciles the off-by-one in exactly one place, so a value that is a hard violation
+in this plugin is also a violation in Sonar.
+
+| Rule | Purpose | Value from | Value |
+|---|---|---|---|
+| `S138` | function length | `function_lines.hard - 1` | 99 |
+| `S104` | file length | `file_lines.hard - 1` | 799 |
+| `S134` | nesting | `nesting.hard - 1` | 3 |
+| `S107` | parameters | `parameters.hard - 1` | 7 |
+
+`S3776` (cognitive complexity) is **not** in this table: it is already active at `threshold=15` in
+every built-in profile, so writing that value back would be a no-op. It is left at the built-in
+default and only read, never set. `python:S1541` (cyclomatic complexity) does **not exist** as a
+rule at all in SonarQube — do not attempt to activate it; cyclomatic complexity for Python is a
+local (`lizard`) metric only.
+
+**Parameter names are resolved at runtime, never hard-coded.** Verified against a live SonarQube
+26.8: `python:S104` takes the parameter `maximum` — **not** the obvious guess
+`maximumFileLocThreshold`. `python:S134` takes `max` — **not** `maximumNestingLevel`. `java:S104`
+takes `Max`, with a capital `M`; case matters and a lowercase `max` is silently ignored by that
+rule. Rule keys are language-prefixed (`python:S138`, `javascript:S138`, …), and their parameter
+names are not guaranteed identical across languages even for the same rule number. Resolve both the
+key and the parameter name per language via `GET /api/rules/search` and `GET /api/rules/show`
+immediately before every `activate_rule` call. A rule absent for a given language is skipped and
+reported, never treated as a failure.
+
+**One `hard` value across all languages is deliberate**, not an oversight. Sonar's own built-in
+defaults differ substantially by language (`javascript:S138` defaults to 200 vs `python:S138` at
+100; `java:S134` defaults to 3), so activating `S138 max=99` is roughly a 2× tightening relative to
+JavaScript's own convention. The profile is named `agent` for this reason: what a model can hold in
+context does not vary by language the way community style guides do, so the plugin does not vary
+the threshold by language either.
+
+**Reconciliation** runs on every audit but stays silent while it is a no-op. Any actual write to the
+profile — a parameter drifted back to the target value, a newly activated rule that was missing —
+is announced in the audit report, so no server mutation happens silently after the one-time
+per-server confirmation.
 
 ### Safe exclusions
 

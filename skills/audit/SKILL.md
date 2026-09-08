@@ -32,7 +32,7 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
 
 ## 2. Ensure local SonarQube
 
-Follow `references/sonar-operations.md`.
+Follow `<plugin-root>/references/sonar.md`.
 
 - Reuse a healthy existing SonarQube Community Build container when possible, even if its name differs.
 - Start a stopped compatible container rather than creating another one.
@@ -44,7 +44,7 @@ Follow `references/sonar-operations.md`.
 
 Choose the scanner and analysis parameters from the actual project, not a generic template.
 
-- Compare the host architecture with the architecture of any scanner image before using it. A scanner image that does not match the host runs under emulation, where type-aware JS/TS analysis can stall indefinitely; in that case run the scanner natively and keep only the server containerised. See `references/sonar-operations.md`.
+- Compare the host architecture with the architecture of any scanner image before using it. A scanner image that does not match the host runs under emulation, where type-aware JS/TS analysis can stall indefinitely; in that case run the scanner natively and keep only the server containerised. See `<plugin-root>/references/sonar.md`.
 - Prefer a build-system-specific official Sonar scanner when it materially improves analysis (for example .NET/build-integrated ecosystems); otherwise use the generic SonarScanner CLI or its Docker image.
 - Pass configuration through CLI/environment/temporary files outside the repository. Do not create `sonar-project.properties` in audit mode.
 - Include real maintained source. Exclude only evidence-backed generated, vendored, cache, dependency, build-output, minified, or coverage-output directories.
@@ -82,7 +82,7 @@ If the working tree has any source changes, rerun. If freshness cannot be proven
 
 ## 6. Prioritize intelligently
 
-Use `references/quality-policy.md`.
+Use `<plugin-root>/references/quality-policy.md`.
 
 Do not dump every issue. Group findings by likely root cause, rule, subsystem, and remediation shape. Prioritize by expected engineering value, not severity alone.
 
