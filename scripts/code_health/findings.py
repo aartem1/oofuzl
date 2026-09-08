@@ -97,6 +97,30 @@ def size_findings(layer, cfg):
     return out
 
 
+def duplicate_findings(near, cfg):
+    out = []
+    for index, cluster in enumerate(near.get("clusters", [])):
+        subject_id = "cluster/%d/%s" % (
+            cluster["size"],
+            cluster["members"][0]["filename"] if cluster["members"] else index,
+        )
+        out.append({
+            "id": "near_duplicate:%s" % subject_id,
+            "kind": "near_duplicate",
+            "layer": "L2",
+            "level": "warn",
+            "subject": {"files": sorted({m["filename"] for m in cluster["members"]}),
+                        "functions": [m["function_name"] for m in cluster["members"]]},
+            "metric": "near_duplicate",
+            "value": cluster["min_lexical"],
+            "threshold": cfg["near_duplicate"]["min_similarity"],
+            "evidence": {"size": cluster["size"], "avg_tokens": cluster["avg_tokens"],
+                         "max_lexical": cluster["max_lexical"],
+                         "min_structural": cluster["min_structural"]},
+        })
+    return out
+
+
 def build_summary(layer, inventory, cfg):
     files = layer.get("files", [])
     loc = sum(row["lines"] for row in files)

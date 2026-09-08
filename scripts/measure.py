@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from code_health import config as C          # noqa: E402
 from code_health import churn as CH          # noqa: E402
 from code_health import discovery as D       # noqa: E402
+from code_health import dup as DUP           # noqa: E402
 from code_health import findings as F        # noqa: E402
 from code_health import sizes as S           # noqa: E402
 
@@ -68,7 +69,12 @@ def build_document(args):
     if "churn" in wanted:
         present = set(inventory.source) | set(inventory.tests)
         layers["churn"] = CH.measure_churn(repo_root, cfg, present)
-    for name in ("dup", "imports", "dead", "derived"):
+    if "dup" in wanted:
+        near = DUP.find_near_duplicates(repo_root, layers["size"].get("functions", []), cfg)
+        layers["dup"] = {"status": "partial", "near": near, "exact": [],
+                         "reason": "jscpd not wired yet; near-duplicate pass ran"}
+        all_findings.extend(F.duplicate_findings(near, cfg))
+    for name in ("imports", "dead", "derived"):
         if name in wanted:
             layers[name] = F.empty_layer("not implemented yet")
 
