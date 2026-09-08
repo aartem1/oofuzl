@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from code_health import config as C          # noqa: E402
+from code_health import churn as CH          # noqa: E402
 from code_health import discovery as D       # noqa: E402
 from code_health import findings as F        # noqa: E402
 from code_health import sizes as S           # noqa: E402
@@ -64,8 +65,10 @@ def build_document(args):
     if "size" in wanted:
         layers["size"] = S.measure_sizes(repo_root, inventory, cfg)
         all_findings.extend(F.size_findings(layers["size"], cfg))
-    # Tasks 6-10 replace the remaining not_measured placeholders.
-    for name in ("dup", "imports", "dead", "churn", "derived"):
+    if "churn" in wanted:
+        present = set(inventory.source) | set(inventory.tests)
+        layers["churn"] = CH.measure_churn(repo_root, cfg, present)
+    for name in ("dup", "imports", "dead", "derived"):
         if name in wanted:
             layers[name] = F.empty_layer("not implemented yet")
 
