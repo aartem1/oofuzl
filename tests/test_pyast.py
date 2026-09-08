@@ -237,5 +237,22 @@ class LayerTests(unittest.TestCase):
         self.assertEqual(degree["pkg.b"]["fan_in"], 1)
 
 
+    def test_the_symbol_table_is_built_from_source_only(self):
+        """`symbol_collision` was entirely noise as shipped: measured over
+        source + tests, the complete output on this repository was `main`
+        (6 files), `setUp` (7), `write` (3). The import graph still keeps
+        tests -- a test importing a source module is a real edge."""
+        root = Path(tempfile.mkdtemp())
+        (root / "tests").mkdir()
+        (root / "app.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        (root / "tests" / "test_app.py").write_text(
+            "import app\n\n\ndef helper():\n    return app.alpha()\n", encoding="utf-8")
+        cfg = C.load_config(root)
+        inv = D.enumerate_files(root, cfg)
+        layer = PA.measure_imports(root, inv, cfg)
+        self.assertEqual(sorted(row["name"] for row in layer["symbols"]), ["alpha"])
+        self.assertIn("tests.test_app", {row["module"] for row in layer["degree"]})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,27 @@ fires, because `A5` still exists; it is simply not the group it used to be. With
 `gid`, a group that genuinely disappeared between audits is detectable as a missing key, and is
 reported as such rather than silently substituted.
 
+## Re-ranking findings: `hotspot`, `edit_fanout`, `symbol_collision`
+
+These three L3 metrics **never form their own group** — stated in DESIGN §8, `metrics.md`,
+`quality-policy.md` and the audit skill, and it stands. That rule is about group *creation*, not
+about reference, and the difference matters: `measure.py` emits `symbol_collision` findings, and a
+finding no group may ever name is inert — it can never be revalidated by `fix`, and the evidence in
+a group's `why` has nothing to point at.
+
+**How they are referenced.** A re-ranking finding's id may appear in an existing group's
+`finding_ids` when that group's own remediation also resolves it — the extraction that removes the
+duplicate cluster is also what stops three files defining `build_payload` — and when it does, the
+group's `why` must cite it in words, because that is the whole reason it is there. It never appears
+alone: a `finding_ids` list consisting only of re-ranking findings is a group these metrics were
+forbidden from creating, written a different way. A collision that no group's remediation touches
+stays out of `finding_ids` entirely and is reported in the audit's **Agent ergonomics** section,
+which is where the un-actioned L3 evidence lives.
+
+Consequence for `fix`: a group carrying such an id re-measures the `derived` layer along with its
+own (see the kind → layer table in `<plugin-root>/references/metrics.md`), so the collision is
+revalidated with everything else rather than trusted from the ledger.
+
 ## Queue item state and `running` recovery
 
 `state` is one of `pending | running | done | failed | skipped`.

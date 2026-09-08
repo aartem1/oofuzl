@@ -51,10 +51,23 @@ def _hotspots(size_layer, churn_layer):
     return hotspots
 
 
+# Names whose repetition across files is a convention, not a navigation
+# hazard: every test case has a `setUp`, every package root an `__init__`,
+# every runnable module a `main`. They are what the metric found first on
+# every repository it was run against, and finding them says nothing about
+# the code. Deliberately short -- anything longer starts hiding real
+# collisions behind a maintainer's taste.
+CONVENTION_NAMES = frozenset({
+    "__init__", "main", "setUp", "tearDown", "__str__", "__repr__",
+})
+
+
 def _collisions(imports_layer, cfg):
     minimum = cfg["collision_min_files"]
     by_name = {}
     for symbol in imports_layer.get("symbols", []) or []:
+        if symbol["name"] in CONVENTION_NAMES:
+            continue
         entry = by_name.setdefault(symbol["name"], {"files": set(), "tokens": []})
         entry["files"].add(symbol["file"])
         entry["tokens"].append(symbol.get("tokens", 0))

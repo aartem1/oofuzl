@@ -344,6 +344,15 @@ def measure_imports(repo_root, inventory, cfg):
                 "cycles": [], "degree": []}
 
     out = analyze(repo_root, relpaths)
+    # The import GRAPH keeps tests: a test importing a source module is a
+    # real edge, and a cycle running through a test file is a real cycle.
+    # The SYMBOL TABLE does not. Built over source + tests, the complete
+    # output on this plugin's own repository was `main` (6 files), `setUp`
+    # (7) and `write` (3) -- three of three convention names, and every one
+    # of them a test-suite artefact rather than a navigation hazard in
+    # production code.
+    source = set(inventory.source)
+    symbols = [row for row in out["symbols"] if row["file"] in source]
     graph = out["graph"]
     fan_in = {name: 0 for name in graph}
     for edges in graph.values():
@@ -361,6 +370,6 @@ def measure_imports(repo_root, inventory, cfg):
         "degree": degree,
         "unresolved_imports": out["unresolved"],
         "params": out["params"],
-        "symbols": out["symbols"],
+        "symbols": symbols,
         "errors": out["errors"],
     }

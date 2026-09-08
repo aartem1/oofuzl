@@ -85,6 +85,19 @@ class DerivedTests(unittest.TestCase):
         self.assertEqual(out["edit_fanout_basis"], "unavailable")
         self.assertIsNone(out["edit_fanout"][0]["ratio"])
 
+    def test_convention_names_are_not_navigation_hazards(self):
+        """Every test case has a `setUp` and every runnable module a `main`;
+        their repetition says nothing about the code. These were three of
+        three collisions the metric found on this plugin's own repository."""
+        symbols = [{"name": name, "file": "%s.py" % index, "kind": "function",
+                    "tokens": 20}
+                   for name in ("setUp", "main", "genuine")
+                   for index in range(3)]
+        out = DV.measure_derived(self.size(), self.churn(),
+                                 self.imports(symbols), self.cfg)
+        self.assertEqual([row["name"] for row in out["symbol_collisions"]],
+                         ["genuine"])
+
     def test_an_unmeasured_size_layer_never_reports_zero_hotspots(self):
         """With lizard absent, `size` is `partial` and hands over no
         function rows, so every hotspot score is zero and the list comes out
