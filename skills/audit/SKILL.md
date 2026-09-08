@@ -37,7 +37,7 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
 - Audit may write to the **Sonar server** (create the project, create/reconcile the quality
   profile) but never to the target repository. Disclose and confirm this once per server before
   the first write; later audits against the same server reconcile silently unless an actual write
-  happens, which is then announced in the report (see step 5).
+  happens, which is then announced in the report (see step 10).
 
 ## 1. Resolve scope and baseline
 
@@ -69,9 +69,9 @@ python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <
   `available: true, installed_by_us: false` goes under "Already present". For example:
   `Installed for this audit: jscpd@5.1.2, madge@8.0.0. Already present: lizard 1.23.0, vulture 2.7.`
   A tool that stayed `available: false` is not part of this line — its absence is carried instead
-  by that layer's own `status`/`reason` (step 6, step 8).
+  by that layer's own `status`/`reason` (step 3, step 10).
 - Keep the parsed `layers` and `findings` from this document; they feed grouping (step 7) and the
-  report (step 9) regardless of whether Sonar ends up available.
+  report (step 10) regardless of whether Sonar ends up available.
 
 ## 3. Layer Sonar on top, when reachable
 
@@ -86,7 +86,7 @@ Follow `<plugin-root>/references/sonar.md`.
 - If authentication is not configured, guide the user through the smallest one-time setup. Prefer a
   user token exposed through `SONAR_TOKEN`; never write it into the repository.
 - If Docker is unavailable/unhealthy, or the user declines installation, or setup otherwise fails:
-  set `L1: not_measured` with the reason and move straight to step 6. Do not retry indefinitely and
+  set `L1: not_measured` with the reason and move straight to step 7. Do not retry indefinitely and
   do not block the rest of the audit on this layer.
 
 ### What is lost without L1
