@@ -1,19 +1,8 @@
-import re
 import unittest
-from pathlib import Path
 
 from helpers import PLUGIN_ROOT
 
 SKILLS = PLUGIN_ROOT / "skills"
-
-
-def frontmatter(path):
-    text = path.read_text(encoding="utf-8")
-    match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    assert match, "no frontmatter in %s" % path
-    return dict(
-        line.split(":", 1) for line in match.group(1).splitlines() if ":" in line
-    ), text
 
 
 class SkillTests(unittest.TestCase):

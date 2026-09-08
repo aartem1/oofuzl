@@ -157,6 +157,69 @@ class NestingAgreementTests(unittest.TestCase):
     duplicates the CSV parser: it cannot import code_health. This is the
     corresponding cross-check for that duplication."""
 
+    def assert_agree(self, name, source, expected):
+        """Both implementations agree AND both get the pinned number right.
+
+        Agreement alone is not enough: `guard.py` and `pyast.py` are two
+        copies of one algorithm, so they can be wrong together.
+        """
+        root = Path(tempfile.mkdtemp())
+        (root / name).write_text(source, encoding="utf-8")
+        guard = load_guard()
+        theirs = guard._python_nesting(source)
+        mine, errors = PA.measure_nesting(root, [name])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["nesting"], expected)
+        self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
+
+    def test_depth_reached_inside_a_plain_else_counts(self):
+        """Proved by mutation that this was a blind spot: deleting the
+        `elif orelse:` arm of `_if_depth` -- the one that handles a plain
+        `else:` at the end of an `if`/`elif` chain -- left every existing
+        nesting test green, because all of them reach their depth through
+        the `if` BODY and never through an `else`."""
+        self.assert_agree("plain_else.py", (
+            "def f(xs):\n"
+            "    if xs:\n"
+            "        return 1\n"
+            "    elif len(xs) == 2:\n"
+            "        return 2\n"
+            "    else:\n"
+            "        for x in xs:\n"
+            "            while x:\n"
+            "                return 3\n"
+            "    return 0\n"
+        ), 3)     # if/elif/else chain -> for -> while
+
+    def test_depth_reached_inside_a_finally_counts(self):
+        """Same blind spot for `Try.finalbody`: dropping it from
+        `_stmt_bodies` left all existing tests green."""
+        self.assert_agree("finally.py", (
+            "def g(xs):\n"
+            "    try:\n"
+            "        return 1\n"
+            "    except ValueError:\n"
+            "        return 2\n"
+            "    finally:\n"
+            "        for x in xs:\n"
+            "            if x:\n"
+            "                pass\n"
+        ), 3)     # try/finally -> for -> if
+
+    def test_depth_reached_inside_a_loop_else_counts(self):
+        """And for the `orelse` of a `for`/`while` -- the `else:` clause
+        that runs when the loop was not broken out of."""
+        self.assert_agree("loop_else.py", (
+            "def h(xs):\n"
+            "    for x in xs:\n"
+            "        pass\n"
+            "    else:\n"
+            "        while xs:\n"
+            "            with open('a') as fh:\n"
+            "                pass\n"
+        ), 3)     # for/else -> while -> with
+
     def test_guard_and_pyast_agree_on_a_flat_python_fixture(self):
         source = "def flat(x):\n" + "".join(
             "    if x == %d:\n        return %d\n" % (i, i) for i in range(5))

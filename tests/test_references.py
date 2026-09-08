@@ -1,11 +1,9 @@
 import re
 import unittest
-from pathlib import Path
 
 from helpers import PLUGIN_ROOT
 
 REFERENCES = PLUGIN_ROOT / "references"
-REQUIRED = ["metrics.md", "tools.md", "ledger.md", "sonar.md", "quality-policy.md"]
 
 
 class ReferenceTests(unittest.TestCase):
