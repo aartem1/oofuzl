@@ -6,9 +6,14 @@ from helpers import PLUGIN_ROOT, load_package
 load_package()
 from code_health import sizes as S  # noqa: E402
 
+# Every numeric field holds a DISTINCT value on purpose. With coincidental
+# duplicates (the real lizard row this is modelled on has ccn == param == 5 and
+# nloc == length == end_line == 7) a column swap between two equal fields is
+# invisible, and catching column swaps is this file's entire reason to exist.
+# Consistency check: length == end_line - start_line + 1 == 9.
 SAMPLE_CSV = (
-    '7,5,41,5,7,"outer@1-7@probe.py","probe.py","outer",'
-    '"outer( a , b , c = 1 , * args , ** kw )",1,7,4\n'
+    '7,5,41,3,9,"outer@11-19@probe.py","probe.py","outer",'
+    '"outer( a , b , c = 1 , * args , ** kw )",11,19,4\n'
 )
 
 
@@ -32,6 +37,12 @@ class ParserAgreementTests(unittest.TestCase):
                       "start_line", "end_line", "nesting"):
             self.assertEqual(mine[field], theirs[field], field)
         self.assertEqual(mine["function_name"], theirs["function_name"])
+        # Guard the guard: if the fixture ever regains duplicate numeric values,
+        # a swap between the duplicated columns stops being detectable.
+        numbers = [mine[f] for f in ("nloc", "ccn", "token", "param", "length",
+                                     "start_line", "end_line", "nesting")]
+        self.assertEqual(len(numbers), len(set(numbers)),
+                         "fixture must keep every numeric field distinct")
 
     def test_both_use_the_same_default_thresholds(self):
         from code_health import config as C
