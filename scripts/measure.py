@@ -19,6 +19,7 @@ from code_health import churn as CH          # noqa: E402
 from code_health import derived as DV        # noqa: E402
 from code_health import discovery as D       # noqa: E402
 from code_health import dup as DUP           # noqa: E402
+from code_health import externals as EX      # noqa: E402
 from code_health import findings as F        # noqa: E402
 from code_health import pyast as PA          # noqa: E402
 from code_health import sizes as S           # noqa: E402
@@ -65,6 +66,9 @@ def build_document(args):
     layers = {name: F.empty_layer("layer not requested") for name in F.LAYER_NAMES}
     all_findings = []
 
+    tool_names = ["lizard", "jscpd", "madge", "vulture", "knip"]
+    tools = EX.survey(tool_names, install_missing=args.install_missing)
+
     if "size" in wanted:
         layers["size"] = S.measure_sizes(repo_root, inventory, cfg)
         all_findings.extend(F.size_findings(layers["size"], cfg))
@@ -73,19 +77,24 @@ def build_document(args):
         layers["churn"] = CH.measure_churn(repo_root, cfg, present)
     if "dup" in wanted:
         near = DUP.find_near_duplicates(repo_root, layers["size"].get("functions", []), cfg)
-        layers["dup"] = {"status": "partial", "near": near, "exact": [],
-                         "reason": "jscpd not wired yet; near-duplicate pass ran"}
+        exact = EX.run_jscpd(repo_root, cfg, tools["jscpd"])
+        status = "measured" if exact["status"] == "measured" else "partial"
+        layers["dup"] = {"status": status, "near": near,
+                         "exact": exact.get("clones", []),
+                         "reason": exact.get("reason")}
         all_findings.extend(F.duplicate_findings(near, cfg))
     if "imports" in wanted:
         layers["imports"] = PA.measure_imports(repo_root, inventory, cfg)
+        js = EX.run_madge(repo_root, list(inventory.source), tools["madge"])
+        _merge_js_imports(layers["imports"], js)
         all_findings.extend(F.cycle_findings(layers["imports"]))
+    if "dead" in wanted:
+        layers["dead"] = EX.run_dead(repo_root, inventory,
+                                     {"vulture": tools["vulture"], "knip": tools["knip"]})
     if "derived" in wanted:
         layers["derived"] = DV.measure_derived(
             layers["size"], layers["churn"], layers["imports"], cfg)
         all_findings.extend(F.derived_findings(layers["derived"], cfg))
-    for name in ("dead",):
-        if name in wanted:
-            layers[name] = F.empty_layer("not implemented yet")
 
     return {
         "schema": 1,
@@ -93,11 +102,38 @@ def build_document(args):
                         .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "repo": repo_facts(repo_root),
         "config": cfg,
-        "tools": {},
+        "tools": tools,
         "layers": layers,
         "findings": all_findings,
         "summary": F.build_summary(layers["size"], inventory, cfg),
     }
+
+
+def _merge_js_imports(imports_layer, js):
+    """Fold madge's JS/TS result into the Python import layer."""
+    if js["status"] != "measured":
+        if js.get("reason") and "no JS/TS sources" not in js["reason"]:
+            existing = imports_layer.get("reason")
+            imports_layer["reason"] = "; ".join(x for x in (existing, js["reason"]) if x)
+            if imports_layer["status"] == "measured":
+                imports_layer["status"] = "partial"
+        return imports_layer
+
+    imports_layer["languages_measured"] = sorted(
+        set(imports_layer.get("languages_measured", [])) | {"javascript"})
+    imports_layer["cycles"] = list(imports_layer.get("cycles", [])) + js["cycles"]
+    fan_in = {}
+    for module, targets in js["graph"].items():
+        for target in targets:
+            fan_in[target] = fan_in.get(target, 0) + 1
+    imports_layer["degree"] = list(imports_layer.get("degree", [])) + [
+        {"module": module, "fan_out": len(targets), "fan_in": fan_in.get(module, 0)}
+        for module, targets in sorted(js["graph"].items())
+    ]
+    if imports_layer["status"] == "not_measured":
+        imports_layer["status"] = "measured"
+        imports_layer["reason"] = None
+    return imports_layer
 
 
 def main(argv=None):
