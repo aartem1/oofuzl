@@ -58,6 +58,28 @@ class DerivedTests(unittest.TestCase):
         out = DV.measure_derived(self.size(), self.churn(), {"symbols": symbols}, self.cfg)
         self.assertEqual(out["symbol_collisions"], [])
 
+    def test_a_zero_median_falls_back_to_the_mean(self):
+        # 3 of 4 commits touch one file, so the median other-files-per-commit
+        # is 0. Dividing by it would zero every ratio while mean_co_changed is
+        # non-zero -- a column of zeros that still looks like data.
+        churn = dict(self.churn(), commit_sizes=[1, 1, 1, 5], files=[
+            {"path": "hot.py", "commits": 1, "authors": 1, "mean_co_changed": 4.0},
+            {"path": "cold.py", "commits": 1, "authors": 1, "mean_co_changed": 0.0},
+        ])
+        out = DV.measure_derived(self.size(), churn, {"symbols": []}, self.cfg)
+        self.assertEqual(out["edit_fanout_basis"], "mean")
+        ratios = {r["path"]: r["ratio"] for r in out["edit_fanout"]}
+        self.assertEqual(ratios["hot.py"], 4.0)   # mean of [0,0,0,4] is 1.0
+        self.assertEqual(ratios["cold.py"], 0.0)
+
+    def test_no_co_changes_at_all_reports_unavailable(self):
+        churn = dict(self.churn(), commit_sizes=[1, 1, 1], files=[
+            {"path": "solo.py", "commits": 3, "authors": 1, "mean_co_changed": 0.0},
+        ])
+        out = DV.measure_derived(self.size(), churn, {"symbols": []}, self.cfg)
+        self.assertEqual(out["edit_fanout_basis"], "unavailable")
+        self.assertIsNone(out["edit_fanout"][0]["ratio"])
+
     def test_edit_fanout_is_a_ratio_against_the_median_commit(self):
         # commit_sizes [2, 2, 2, 10] -> other-files-per-commit [1, 1, 1, 9], median 1.
         churn = dict(self.churn(), files=[

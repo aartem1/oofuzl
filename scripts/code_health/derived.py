@@ -72,15 +72,27 @@ def measure_derived(size_layer, churn_layer, imports_layer, cfg):
                            "paths": sorted(entry["files"])})
     collisions.sort(key=lambda row: (-row["rank"], row["name"]))
 
-    baseline = _median([max(size - 1, 0) for size in churn_layer.get("commit_sizes", [])])
+    others = [max(size - 1, 0) for size in churn_layer.get("commit_sizes", [])]
+    baseline = _median(others)
+    basis = "median"
+    if not baseline:
+        # A repository whose typical commit touches exactly one file has a
+        # median of zero, and dividing by it would collapse every ratio to 0.0
+        # while `mean_co_changed` is genuinely non-zero -- a column of zeros
+        # that still looks like data. Measured on this plugin's own history:
+        # 35 of 64 commits are single-file. Fall back to the mean, which keeps
+        # the comparison meaningful, and say which denominator was used.
+        baseline = (sum(others) / float(len(others))) if others else 0.0
+        basis = "mean"
     fanout = []
     for row in churn_layer.get("files", []):
         mean_co = row.get("mean_co_changed")
         if mean_co is None:
             continue
         fanout.append({"path": row["path"], "mean_co_changed": round(mean_co, 2),
-                       "ratio": round(mean_co / baseline, 2) if baseline else 0.0})
-    fanout.sort(key=lambda row: (-row["ratio"], row["path"]))
+                       "ratio": round(mean_co / baseline, 2) if baseline else None})
+    fanout.sort(key=lambda row: (-(row["ratio"] or 0.0), row["path"]))
 
     return {"status": "measured", "hotspots": hotspots,
-            "symbol_collisions": collisions, "edit_fanout": fanout}
+            "symbol_collisions": collisions, "edit_fanout": fanout,
+            "edit_fanout_basis": basis if baseline else "unavailable"}
