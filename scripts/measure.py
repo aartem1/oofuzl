@@ -19,6 +19,7 @@ from code_health import churn as CH          # noqa: E402
 from code_health import discovery as D       # noqa: E402
 from code_health import dup as DUP           # noqa: E402
 from code_health import findings as F        # noqa: E402
+from code_health import pyast as PA          # noqa: E402
 from code_health import sizes as S           # noqa: E402
 
 
@@ -74,7 +75,10 @@ def build_document(args):
         layers["dup"] = {"status": "partial", "near": near, "exact": [],
                          "reason": "jscpd not wired yet; near-duplicate pass ran"}
         all_findings.extend(F.duplicate_findings(near, cfg))
-    for name in ("imports", "dead", "derived"):
+    if "imports" in wanted:
+        layers["imports"] = PA.measure_imports(repo_root, inventory, cfg)
+        all_findings.extend(F.cycle_findings(layers["imports"]))
+    for name in ("dead", "derived"):
         if name in wanted:
             layers[name] = F.empty_layer("not implemented yet")
 

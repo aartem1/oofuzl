@@ -121,6 +121,19 @@ def duplicate_findings(near, cfg):
     return out
 
 
+def cycle_findings(layer):
+    out = []
+    for cycle in layer.get("cycles", []):
+        out.append({
+            "id": "import_cycle:%s" % "|".join(cycle),
+            "kind": "import_cycle", "layer": "L2", "level": "warn",
+            "subject": {"modules": cycle},
+            "metric": "import_cycle", "value": len(cycle), "threshold": 2,
+            "evidence": {"modules": cycle},
+        })
+    return out
+
+
 def build_summary(layer, inventory, cfg):
     files = layer.get("files", [])
     loc = sum(row["lines"] for row in files)
