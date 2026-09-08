@@ -31,13 +31,7 @@ def _percentile_ranks(values):
     return ranks
 
 
-def measure_derived(size_layer, churn_layer, imports_layer, cfg):
-    if churn_layer.get("status") != "measured":
-        return {"status": "not_measured",
-                "reason": "churn is %s (%s); hotspots and edit fan-out depend on it"
-                          % (churn_layer.get("status"), churn_layer.get("reason")),
-                "hotspots": [], "symbol_collisions": [], "edit_fanout": []}
-
+def _hotspots(size_layer, churn_layer):
     ccn = _ccn_by_file(size_layer)
     commits = {row["path"]: row["commits"] for row in churn_layer.get("files", [])}
 
@@ -54,7 +48,10 @@ def measure_derived(size_layer, churn_layer, imports_layer, cfg):
         row["churn_pct"] = commit_ranks.get(row["commits"], 0.0)
         row["ccn_pct"] = ccn_ranks.get(row["ccn"], 0.0)
     hotspots.sort(key=lambda row: (-row["score"], row["path"]))
+    return hotspots
 
+
+def _collisions(imports_layer, cfg):
     minimum = cfg["collision_min_files"]
     by_name = {}
     for symbol in imports_layer.get("symbols", []) or []:
@@ -71,7 +68,11 @@ def measure_derived(size_layer, churn_layer, imports_layer, cfg):
                            "rank": round(len(entry["files"]) * avg, 1),
                            "paths": sorted(entry["files"])})
     collisions.sort(key=lambda row: (-row["rank"], row["name"]))
+    return collisions
 
+
+def _edit_fanout(churn_layer):
+    """`(rows, basis)`. See the mean fallback below for why `basis` exists."""
     others = [max(size - 1, 0) for size in churn_layer.get("commit_sizes", [])]
     baseline = _median(others)
     basis = "median"
@@ -92,7 +93,43 @@ def measure_derived(size_layer, churn_layer, imports_layer, cfg):
         fanout.append({"path": row["path"], "mean_co_changed": round(mean_co, 2),
                        "ratio": round(mean_co / baseline, 2) if baseline else None})
     fanout.sort(key=lambda row: (-(row["ratio"] or 0.0), row["path"]))
+    return fanout, (basis if baseline else "unavailable")
 
-    return {"status": "measured", "hotspots": hotspots,
-            "symbol_collisions": collisions, "edit_fanout": fanout,
-            "edit_fanout_basis": basis if baseline else "unavailable"}
+
+def _degraded(value, dep_name, dep_layer, what):
+    """`(value, reason)` for one derived metric against the layer it is
+    computed FROM.
+
+    An empty result computed from a layer that is not `measured` is not a
+    zero, it is an absence: with lizard missing, `size` correctly reports
+    `partial` and hands `derived` zero function rows, and `hotspots` then
+    came out `[]` under `status: "measured"` -- a confident "this repository
+    has no hotspots". Same shape as the churn guard above, applied to the
+    other two dependencies.
+    """
+    if value or dep_layer.get("status") == "measured":
+        return value, None
+    return None, "%s is %s (%s); %s" % (
+        dep_name, dep_layer.get("status"), dep_layer.get("reason"), what)
+
+
+def measure_derived(size_layer, churn_layer, imports_layer, cfg):
+    if churn_layer.get("status") != "measured":
+        return {"status": "not_measured",
+                "reason": "churn is %s (%s); hotspots and edit fan-out depend on it"
+                          % (churn_layer.get("status"), churn_layer.get("reason")),
+                "hotspots": None, "symbol_collisions": None, "edit_fanout": None}
+
+    hotspots, hot_reason = _degraded(
+        _hotspots(size_layer, churn_layer), "size", size_layer,
+        "hotspots need per-function complexity")
+    collisions, sym_reason = _degraded(
+        _collisions(imports_layer, cfg), "imports", imports_layer,
+        "symbol collisions need the symbol table")
+    fanout, basis = _edit_fanout(churn_layer)
+
+    reasons = [r for r in (hot_reason, sym_reason) if r]
+    return {"status": "partial" if reasons else "measured",
+            "reason": "; ".join(reasons) or None,
+            "hotspots": hotspots, "symbol_collisions": collisions,
+            "edit_fanout": fanout, "edit_fanout_basis": basis}

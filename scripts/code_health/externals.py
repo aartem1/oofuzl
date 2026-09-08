@@ -10,6 +10,7 @@ fallback is a plugin-owned venv under XDG_DATA_HOME.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -200,14 +201,18 @@ def run_dead(repo_root, inventory, tool_states):
     elif py:
         reasons.append("vulture unavailable: %s" % vulture.get("reason"))
 
-    knip = tool_states.get("knip", {})
-    if js and knip.get("available"):
-        proc = _run(["npx", "-y", TOOLS["knip"]["package"], "--reporter", "json"],
-                    timeout=900, cwd=str(repo_root))
-        if proc is not None and proc.returncode in (0, 1):
-            measured.append("javascript")
-    elif js:
-        reasons.append("knip unavailable: %s" % knip.get("reason"))
+    if js:
+        # knip was invoked here and its stdout was never read -- `measured`
+        # was appended on the return code alone, which is precisely the
+        # failure mode already fixed for vulture above: a confident "no dead
+        # code in JS/TS" produced by parsing nothing. This plugin has no
+        # verified parser for knip's JSON reporter, so JS/TS dead code is
+        # reported as NOT measured, with the reason saying so, and knip is
+        # not run at all rather than burning a 900-second npx subprocess for
+        # a result nobody reads. Writing an unverified parser would restore
+        # the same lie one level down.
+        reasons.append("JS/TS dead code is not measured: knip's JSON output "
+                       "is not parsed by this plugin")
 
     if not measured:
         return {"status": "not_measured",
@@ -218,11 +223,27 @@ def run_dead(repo_root, inventory, tool_states):
             "languages_measured": measured, "symbols": findings}
 
 
+# `path/to/mod.py:12: unused function 'compute' (60% confidence)`
+_VULTURE_SYMBOL = re.compile(r"unused\s+[\w ]+?\s+'([^']+)'")
+_VULTURE_CONFIDENCE = re.compile(r"\((\d+)% confidence\)")
+
+
 def _parse_vulture(text):
     out = []
     for line in (text or "").splitlines():
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
-        out.append({"file": parts[0], "line": parts[1], "message": parts[2].strip()})
+        message = parts[2].strip()
+        name = _VULTURE_SYMBOL.search(message)
+        confidence = _VULTURE_CONFIDENCE.search(message)
+        out.append({
+            "file": parts[0], "line": parts[1], "message": message,
+            "tool": "vulture",
+            # The symbol name is what a stable `dead_symbol:<file>:<name>`
+            # finding id is built from; the line number moves with any edit
+            # above it. `None` when vulture phrases a message some other way.
+            "name": name.group(1) if name else None,
+            "confidence": int(confidence.group(1)) if confidence else None,
+        })
     return out

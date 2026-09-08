@@ -50,7 +50,7 @@ Four things Sonar cannot do at any setting, and which this plugin therefore owns
 | Layer | Tools | Produces | Consumers |
 |---|---|---|---|
 | **L1 Sonar** | own quality profile (fork of `Sonar way` + S138/S104/S134/S107) | rules, history, quality gate, cognitive complexity, reliability/security findings, coverage, hotspots | `audit` only; **optional** — no Docker ⇒ layer marked `not_measured`, audit continues |
-| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`/`knip`, plain `git`, own Python `ast` pass, own near-duplicate pass, direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
+| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
 | **L3 derived** | own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` |
 
 Every layer is always present in the output with an explicit
@@ -144,12 +144,24 @@ belongs to the `audit` skill, not to the measurer.
 | `size` | file enumeration | `file_too_long`, `file_too_expensive`, `function_too_long`, `function_too_complex`, `too_many_params`, `too_deep_nesting` |
 | `dup` | `size` | `exact_clone`, `near_duplicate` |
 | `imports` | file enumeration | `import_cycle` |
-| `dead` | file enumeration | `dead_symbol` |
+| `dead` | file enumeration | `dead_symbol` (Python only; see "L2 — dead code") |
 | `churn` | git history | — (feeds `derived`) |
-| `derived` | `size` + `churn` | `hotspot`, `symbol_collision`, `edit_fanout` |
+| `derived` | `size` + `churn` + `imports` | `hotspot`, `symbol_collision`, `edit_fanout` |
 
 A requested layer whose dependency is unavailable is `not_measured` with the dependency named as
-the reason, not silently empty.
+the reason, not silently empty. `derived` reads the symbol table out of `imports`, which is why
+`imports` is listed there: without the declaration, `measure.py --layers derived` resolved to
+`size,churn,derived` and produced no collisions at all, and `fix` step 3.1 — which runs exactly
+that before deciding whether a group's findings are still alive — skipped every `symbol_collision`
+group unconditionally.
+
+**The rule is per metric, not only per layer.** `derived` bundles three metrics with three
+different dependencies, so a populated `edit_fanout` (which needs only churn) must not mask an
+`hotspots: []` produced from a `size` layer that already declared itself `partial`. A metric
+computed from a layer that is not `measured` and coming out empty is reported as `null` — "not
+measured" — and its own layer drops to `partial` with the dependency named. `dup` follows the same
+rule across its two independent sources: `near` from this plugin's own pass over `size`'s function
+rows, `exact` from jscpd. `tests/test_measure.py` asserts this contract directly over a real run.
 
 ### File enumeration
 
@@ -375,9 +387,17 @@ Outputs: `cycles` (each an ordered file list), `degree` (fan-in / fan-out per mo
 
 ### L2 — dead code
 
-`vulture` for Python (`--min-confidence 80`), `npx -y knip@6` for JS/TS. Both optional. Findings
-always carry the tool's own confidence, because both have known false positives on dynamic
-dispatch. Grouping and priority are decided in §8, not here.
+`vulture` for Python (`--min-confidence 80`). Optional; findings carry vulture's own confidence and
+the symbol name, because the tool has known false positives on dynamic dispatch and because a
+`dead_symbol` finding id keyed on the name survives an edit elsewhere in the file. Grouping and
+priority are decided in §8, not here.
+
+**JS/TS dead code is `not_measured`, and says so.** `npx -y knip@6` was invoked and its stdout was
+never read — `measured` was appended on the return code alone, which is the same defect already
+fixed for vulture: a confident "no dead code in JS/TS" produced by parsing nothing. There is no
+verified parser here for knip's JSON reporter, so the layer reports `not_measured` with that as the
+reason and knip is not run at all, rather than paying a 900-second subprocess for a result nobody
+reads. Shipping an unverified parser would restore the same claim one level down.
 
 ### L2 — churn
 
@@ -856,7 +876,7 @@ Cursor, and in CI. No Claude Code hooks.
 | `jscpd` | exact/token clones | `npx -y jscpd@5` | `dup.exact` not measured; near-duplicate pass still runs |
 | `madge` | JS/TS import graph | `npx -y madge@8` | JS/TS imports not measured; Python still measured |
 | `vulture` | Python dead code | `uv tool install` → `pipx` → venv | `dead` (Python) not measured |
-| `knip` | JS/TS dead code | `npx -y knip@6` | `dead` (JS/TS) not measured |
+| `knip` | JS/TS dead code — **not currently consumed**, its JSON output is not parsed (§5, `references/tools.md`) | `npx -y knip@6` | `dead` (JS/TS) is not measured either way |
 | `pre-commit` | activates the guard hook | `uv tool install` → `pipx` → venv | `guard install` reports and stops before writing anything |
 | `git` | churn | already present | `churn` and every churn-derived L3 metric not measured |
 | Docker + SonarQube | L1 | `references/sonar.md` playbook | `L1: not_measured`, audit continues |

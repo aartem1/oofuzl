@@ -229,3 +229,33 @@ def find_near_duplicates(repo_root, functions, cfg):
         })
     clusters.sort(key=lambda c: -c["rank"])
     return {"clusters": clusters, "compared": len(entries)}
+
+
+def assemble(size_layer, near, exact):
+    """The `layers.dup` object, built from two independent sources.
+
+    Its status has to come from BOTH. `exact` is jscpd's; `near` is this
+    module's own pass, and that pass reads function rows out of the `size`
+    layer. With lizard missing, `size` correctly reports `partial` and hands
+    over zero rows, and `dup` used to answer `status: "measured"` with
+    `compared: 0` -- a confident "this repository has no duplication",
+    derived from a comparison that never happened. An absent jscpd likewise
+    now yields `exact: None`, never an empty clone list.
+    """
+    reasons = []
+    if near is not None and not near.get("compared") and size_layer.get("status") != "measured":
+        reasons.append("size is %s (%s); the near-duplicate pass received no functions"
+                       % (size_layer.get("status"), size_layer.get("reason")))
+        near = None
+    if exact.get("status") == "measured":
+        clones = exact.get("clones") or []
+    else:
+        clones = None
+        reasons.append(exact.get("reason") or "jscpd did not run")
+
+    if near is None and clones is None:
+        status = "not_measured"
+    else:
+        status = "partial" if reasons else "measured"
+    return {"status": status, "near": near, "exact": clones,
+            "reason": "; ".join(reasons) or None}

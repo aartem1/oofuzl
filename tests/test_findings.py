@@ -13,8 +13,21 @@ from code_health import findings as F  # noqa: E402
 
 
 class LayerResolutionTests(unittest.TestCase):
-    def test_derived_pulls_in_size_and_churn(self):
-        self.assertEqual(F.resolve_layers(["derived"]), {"derived", "size", "churn"})
+    def test_derived_pulls_in_size_churn_and_imports(self):
+        # `imports` is there because `measure_derived` reads its symbol
+        # table; without the declaration `--layers derived` produced no
+        # collisions at all, and `fix` runs exactly that before deciding a
+        # group's findings are gone.
+        self.assertEqual(F.resolve_layers(["derived"]),
+                         {"derived", "size", "churn", "imports"})
+
+    def test_every_documented_layer_dependency_is_declared(self):
+        """LAYER_DEPS is what `--layers` resolves transitively, so a
+        dependency missing from it is a layer silently measured without its
+        input."""
+        for name in F.LAYER_NAMES:
+            for dep in F.LAYER_DEPS.get(name, ()):
+                self.assertIn(dep, F.LAYER_NAMES, "%s -> %s" % (name, dep))
 
     def test_dup_pulls_in_size(self):
         self.assertEqual(F.resolve_layers(["dup"]), {"dup", "size"})
@@ -131,6 +144,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         doc = json.loads(proc.stdout)
         self.assertTrue(any(f["kind"] == "file_too_long" for f in doc["findings"]))
+
+
+class CloneAndDeadFindingTests(unittest.TestCase):
+    """`exact_clone` and `dead_symbol` are documented finding kinds that used
+    to be emitted nowhere -- jscpd's clones stopped at `layers.dup.exact` and
+    vulture's symbols at `layers.dead.symbols`."""
+
+    def cfg(self):
+        return C.load_config(Path(tempfile.mkdtemp()))
+
+    def clone(self, first, second):
+        # Field names and shape taken from a real `jscpd@5 --reporters json`
+        # report produced while writing this. Each side is (path, start line).
+        return {"format": "javascript", "lines": 24, "tokens": 375,
+                "firstFile": {"name": first[0], "start": first[1],
+                              "end": first[1] + 23},
+                "secondFile": {"name": second[0], "start": second[1],
+                               "end": second[1] + 23}}
+
+    def test_a_clone_id_does_not_depend_on_which_side_jscpd_named_first(self):
+        cfg = self.cfg()
+        left, right = ("src/a.js", 1), ("src/b.js", 7)
+        forward = F.clone_findings([self.clone(left, right)], cfg)
+        backward = F.clone_findings([self.clone(right, left)], cfg)
+        self.assertEqual(len(forward), 1)
+        self.assertEqual(forward[0]["id"], backward[0]["id"])
+        self.assertEqual(forward[0]["kind"], "exact_clone")
+
+    def test_a_dead_symbol_id_survives_a_line_shift(self):
+        early = F.dead_findings({"symbols": [
+            {"file": "a.py", "line": "12", "name": "compute",
+             "confidence": 60, "message": "unused function 'compute'"}]})
+        later = F.dead_findings({"symbols": [
+            {"file": "a.py", "line": "48", "name": "compute",
+             "confidence": 60, "message": "unused function 'compute'"}]})
+        self.assertEqual(early[0]["id"], later[0]["id"])
+        self.assertEqual(early[0]["kind"], "dead_symbol")
+        # The tool's own confidence travels with the finding: both dead-code
+        # tools have known false positives on dynamic dispatch.
+        self.assertEqual(early[0]["value"], 60)
 
 
 if __name__ == "__main__":

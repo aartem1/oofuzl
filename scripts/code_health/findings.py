@@ -9,7 +9,12 @@ from . import config as _config
 Measurement = namedtuple("Measurement", "metric value threshold")
 
 LAYER_NAMES = ("size", "dup", "imports", "dead", "churn", "derived")
-LAYER_DEPS = {"dup": ("size",), "derived": ("size", "churn")}
+# `derived` reads `imports_layer["symbols"]` for symbol collisions, so
+# `imports` is a real dependency and not declaring it made
+# `measure.py --layers derived` yield no collisions at all -- which is
+# exactly what `fix` step 3.1 runs before deciding a group's findings are
+# gone. Every `symbol_collision` group was therefore skipped unconditionally.
+LAYER_DEPS = {"dup": ("size",), "derived": ("size", "churn", "imports")}
 
 # (finding kind, threshold key, row key)
 _FILE_RULES = (
@@ -117,7 +122,7 @@ def size_findings(layer, cfg):
 
 def duplicate_findings(near, cfg):
     out = []
-    for index, cluster in enumerate(near.get("clusters", [])):
+    for index, cluster in enumerate((near or {}).get("clusters", [])):
         subject_id = "cluster/%d/%s" % (
             cluster["size"],
             cluster["members"][0]["filename"] if cluster["members"] else index,
@@ -139,6 +144,71 @@ def duplicate_findings(near, cfg):
     return out
 
 
+def clone_findings(clones, cfg):
+    """`exact_clone` findings from jscpd's duplicate blocks.
+
+    A documented finding kind (DESIGN 5 and 8, `references/metrics.md`,
+    `references/quality-policy.md`, `skills/audit/SKILL.md`) that used to
+    land in `layers.dup.exact` and become nothing, so the audit's
+    "`near_duplicate`, `exact_clone` -> one group per cluster" row could
+    only ever fire on half its inputs.
+    """
+    out = []
+    for clone in clones or []:
+        places = _clone_places(clone)
+        if not places:
+            continue
+        out.append({
+            "id": "exact_clone:%s" % "|".join(places),
+            "kind": "exact_clone", "layer": "L2", "level": "warn",
+            "subject": {"files": sorted({p.rsplit(":", 1)[0] for p in places}),
+                        "places": places},
+            "metric": "exact_clone", "value": clone.get("tokens"),
+            "threshold": cfg["near_duplicate"]["min_tokens"],
+            "evidence": {"lines": clone.get("lines"), "tokens": clone.get("tokens"),
+                         "format": clone.get("format")},
+        })
+    out.sort(key=lambda f: f["id"])
+    return out
+
+
+def _clone_places(clone):
+    """`file:start_line` for each side of one jscpd duplicate, sorted so the
+    id does not depend on which side jscpd called first."""
+    places = []
+    for side in ("firstFile", "secondFile"):
+        entry = clone.get(side) or {}
+        name = entry.get("name")
+        if name:
+            places.append("%s:%s" % (name, entry.get("start")))
+    return sorted(places)
+
+
+def dead_findings(layer):
+    """`dead_symbol` findings from vulture/knip results.
+
+    Same story as `exact_clone`: documented everywhere, emitted nowhere.
+    The id keys on the symbol NAME rather than its line, so it survives an
+    edit elsewhere in the file, and the tool's own confidence travels with
+    the finding because both tools have known false positives on dynamic
+    dispatch (DESIGN 5).
+    """
+    out = []
+    for row in layer.get("symbols") or []:
+        name = row.get("name") or "line %s" % row.get("line")
+        out.append({
+            "id": "dead_symbol:%s:%s" % (row.get("file"), name),
+            "kind": "dead_symbol", "layer": "L2", "level": "warn",
+            "subject": {"file": row.get("file"), "symbol": row.get("name"),
+                        "line": row.get("line")},
+            "metric": "dead_symbol", "value": row.get("confidence"),
+            "threshold": None,
+            "evidence": {"message": row.get("message"), "tool": row.get("tool")},
+        })
+    out.sort(key=lambda f: f["id"])
+    return out
+
+
 def cycle_findings(layer):
     out = []
     for cycle in layer.get("cycles", []):
@@ -154,7 +224,7 @@ def cycle_findings(layer):
 
 def derived_findings(layer, cfg):
     out = []
-    for row in layer.get("symbol_collisions", []):
+    for row in layer.get("symbol_collisions") or []:
         out.append({
             "id": "symbol_collision:%s" % row["name"],
             "kind": "symbol_collision", "layer": "L3", "level": "warn",

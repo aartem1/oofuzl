@@ -163,9 +163,8 @@ common case.
 ## `npx -y` and Python installs
 
 `npx -y <pkg>` downloads into the npx cache on first use and needs network access; offline, the
-layer that depends on it (`dup.exact` via `jscpd`, JS/TS `imports` via `madge`, JS/TS `dead` via
-`knip`) reports `not_measured` with `reason: network unavailable`, and the rest of the audit still
-completes — a missing optional tool is never fatal to the run.
+layer that depends on it (`dup.exact` via `jscpd`, JS/TS `imports` via `madge`) reports
+`not_measured` with `reason: network unavailable`, and the rest of the audit still completes — a missing optional tool is never fatal to the run.
 
 `pip install --user` is **refused** under PEP 668 on a Homebrew Python — verified,
 `error: externally-managed-environment` / `EXTERNALLY-MANAGED` is present on the calibration
@@ -229,3 +228,26 @@ Own implementation, no external dependency (`<plugin-root>/references/metrics.md
 The number surfaced to the user is always the **lexical** similarity — the figure comparable to a
 manually-measured "64–75% pairwise similarity" baseline — even for pairs that were only found
 through the structural index.
+
+## `knip` and JS/TS dead code
+
+JS/TS dead code is **not measured**, and the `dead` layer says so in its `reason`. `knip` used to be
+invoked with `--reporter json` and its stdout thrown away: the layer appended `javascript` to
+`languages_measured` on the return code alone. That is a confident "no dead code in JS/TS" produced
+by parsing nothing — the same failure already corrected for `vulture`, where an exit code of 1 means
+both "found dead code" and "error" and only stderr separates them.
+
+There is no verified parser here for knip's JSON reporter, so the honest report is `not_measured`
+with the reason naming exactly that, and knip is not invoked at all rather than paying a
+900-second `npx` subprocess for output nobody reads. Adding a parser written against a guessed
+schema would restore the same claim one level down. `vulture` output, by contrast, is parsed and
+verified against real output:
+
+```
+d.py:1: unused import 'os' (90% confidence)
+d.py:4: unused class 'Report' (60% confidence)
+d.py:5: unused method 'helper' (60% confidence)
+```
+
+Both the symbol name and the confidence are extracted; the name is what makes a `dead_symbol`
+finding id stable when lines move above it.

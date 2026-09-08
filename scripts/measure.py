@@ -78,11 +78,9 @@ def build_document(args):
     if "dup" in wanted:
         near = DUP.find_near_duplicates(repo_root, layers["size"].get("functions", []), cfg)
         exact = EX.run_jscpd(repo_root, cfg, tools["jscpd"])
-        status = "measured" if exact["status"] == "measured" else "partial"
-        layers["dup"] = {"status": status, "near": near,
-                         "exact": exact.get("clones", []),
-                         "reason": exact.get("reason")}
-        all_findings.extend(F.duplicate_findings(near, cfg))
+        layers["dup"] = DUP.assemble(layers["size"], near, exact)
+        all_findings.extend(F.duplicate_findings(layers["dup"]["near"], cfg))
+        all_findings.extend(F.clone_findings(layers["dup"]["exact"], cfg))
     if "imports" in wanted:
         layers["imports"] = PA.measure_imports(repo_root, inventory, cfg)
         js = EX.run_madge(repo_root, list(inventory.source), tools["madge"])
@@ -90,7 +88,8 @@ def build_document(args):
         all_findings.extend(F.cycle_findings(layers["imports"]))
     if "dead" in wanted:
         layers["dead"] = EX.run_dead(repo_root, inventory,
-                                     {"vulture": tools["vulture"], "knip": tools["knip"]})
+                                     {"vulture": tools["vulture"]})
+        all_findings.extend(F.dead_findings(layers["dead"]))
     if "derived" in wanted:
         layers["derived"] = DV.measure_derived(
             layers["size"], layers["churn"], layers["imports"], cfg)
