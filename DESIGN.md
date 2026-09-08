@@ -840,6 +840,8 @@ functions reads the same way, for the same reason.
 **Which thresholds apply:** the current `.code-health/config.json`, not the frozen copy. The frozen
 copy exists so drift can be reported — lowering a threshold immediately tightens the ceiling, which
 is the intended way to raise the bar; raising one is announced by `guard check` as a loosening.
+`check` prints the drift on every run, whether or not anything fails; the hook path prints it only
+alongside a failure, where it explains the ceiling, rather than on every commit.
 
 Failure prints, per violation: file, entity, metric, baseline/threshold, current value, and both
 escape hatches — `git commit --no-verify` and `/code-health:guard update-baseline`. Exit 1.
@@ -856,7 +858,10 @@ with one parser and enforcing it with another — against a different lizard ver
 immediate false failures on untouched code the first time a CCN or NS calculation changes upstream.
 
 `update-baseline` prints what moved in each direction; a baseline that moved **up** on any metric is
-called out explicitly, because that is the ratchet slipping.
+called out explicitly, because that is the ratchet slipping. That requires reading the OUTGOING
+baseline before overwriting it — an ordering the first implementation did not have, which made the
+promise unimplementable. Files present in only one of the two baselines are new or removed entities,
+counted separately rather than reported as movement.
 
 ### `check`
 

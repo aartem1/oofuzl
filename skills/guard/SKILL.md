@@ -58,7 +58,9 @@ unpredictable. Reordering two same-named functions reads the same way.
 The **current** `.code-health/config.json` in the target repository, never the frozen copy stored
 inside `baseline.json`. The frozen copy exists only for drift reporting: lowering a threshold in
 `config.json` tightens the ceiling immediately (the intended way to raise the bar over time), and
-raising one is announced by `check` as a loosening rather than silently taking effect.
+raising one is announced by `check` as a loosening rather than silently taking effect. `check`
+prints that announcement on every run, even when nothing fails; the hook prints it only when a
+commit is being rejected, so it explains the ceiling instead of nagging on every commit.
 
 ## 3. `install`
 
@@ -145,9 +147,16 @@ pre-commit only ever passes files it already tracks as part of the commit.
 ## 5. `update-baseline`
 
 Re-measure via the vendored `.code-health/guard.py` (never the plugin's own copy — see "One
-measurement path" below) and rewrite `.code-health/baseline.json`. Print what moved in each
-direction, and call out explicitly any metric that moved **up** — that is the ratchet slipping, not
-routine churn, and it should never scroll past unremarked.
+measurement path" below) and rewrite `.code-health/baseline.json`:
+
+```bash
+python .code-health/guard.py --baseline .code-health/baseline.json --repo .
+```
+
+The script itself prints what moved in each direction and marks every upward movement `UP`, because
+it reads the outgoing baseline before overwriting it. Relay that output — do not summarize the `UP`
+lines away. A metric that moved up is the ratchet slipping, not routine churn, and it should never
+scroll past unremarked.
 
 `update-baseline` is **never** run as part of `/code-health:fix`. It is a separate, deliberate act
 taken after a real improvement lands, not an automatic step in the fix cycle and not an escape hatch

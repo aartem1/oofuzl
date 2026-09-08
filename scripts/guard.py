@@ -458,6 +458,129 @@ def report(violations):
     print("To bypass this one commit:         git commit --no-verify")
 
 
+def threshold_drift(frozen, current):
+    """Metrics whose threshold moved since the baseline was frozen.
+
+    `baseline["thresholds"]` was written and never read. DESIGN 10 says the
+    frozen copy exists so drift can be REPORTED: lowering a threshold
+    tightens the ceiling immediately, which is the intended way to raise the
+    bar, and raising one is a loosening that must be announced rather than
+    take effect quietly.
+    """
+    moved = []
+    for name, levels in sorted(current.items()):
+        was = (frozen or {}).get(name) or {}
+        for level in ("warn", "hard"):
+            before, now = was.get(level), levels.get(level)
+            if before is None or now is None or before == now:
+                continue
+            moved.append({"metric": name, "level": level, "from": before,
+                          "to": now,
+                          "direction": "loosened" if now > before else "tightened"})
+    return moved
+
+
+def report_drift(moved):
+    if not moved:
+        return
+    print("code-health guard: thresholds moved since the baseline was frozen\n")
+    for row in moved:
+        print("  %-9s %-16s %-5s %s -> %s"
+              % (row["direction"], row["metric"], row["level"],
+                 row["from"], row["to"]))
+    if any(row["direction"] == "loosened" for row in moved):
+        print("\n  A loosened threshold raises the ceiling for every entity that has no\n"
+              "  baseline value of its own. That is the bar moving down, not code improving.")
+    print("")
+
+
+# Which numbers a baseline diff compares, per entity kind.
+_FILE_MOVES = (("file lines", "lines"), ("estimated tokens", "tokens"))
+_FUNC_MOVES = (("function lines", "lines"), ("cyclomatic complexity", "ccn"),
+               ("parameters", "params"), ("nesting depth", "nesting"))
+_MAX_LISTED_MOVES = 20
+
+
+def _entity_pairs(previous, current):
+    """`(path, entity, metrics, before, after)` for every file and function
+    present in BOTH baselines. Anything only in one of them is a new or
+    removed entity, not a movement, and is counted separately."""
+    for path, after in sorted(current.items()):
+        before = previous.get(path)
+        if before is None:
+            continue
+        yield path, None, _FILE_MOVES, before, after
+        for name, func_after in sorted(after.get("functions", {}).items()):
+            func_before = (before.get("functions") or {}).get(name)
+            if func_before is not None:
+                yield path, name, _FUNC_MOVES, func_before, func_after
+
+
+def baseline_moves(previous, current):
+    """`(worse, better)` -- every metric that moved, in each direction."""
+    worse, better = [], []
+    for path, entity, metrics, before, after in _entity_pairs(previous or {}, current):
+        for label, key in metrics:
+            was, now = before.get(key), after.get(key)
+            if was is None or now is None or now == was:
+                continue
+            (worse if now > was else better).append(
+                {"path": path, "entity": entity, "metric": label,
+                 "from": was, "to": now})
+    return worse, better
+
+
+def report_baseline_moves(previous, current, moves):
+    """What moved in each direction, with every upward move named.
+
+    `--baseline` used to overwrite the file before anything could diff it,
+    so "prints what moved in each direction, calling out explicitly any
+    metric that moved up" (DESIGN 10, guard SKILL 5) was unimplementable.
+    The upward callout is the only thing that makes a slipping ratchet
+    visible: an entity's new value becomes its permanent floor.
+    """
+    worse, better = moves
+    previous = previous or {}
+    print("  files: %d measured, %d new, %d gone"
+          % (len(current), len(set(current) - set(previous)),
+             len(set(previous) - set(current))))
+    print("  metrics on entities present in both: %d improved, %d worsened"
+          % (len(better), len(worse)))
+    for row in worse[:_MAX_LISTED_MOVES]:
+        where = "%s::%s" % (row["path"], row["entity"]) if row["entity"] else row["path"]
+        print("  UP  %-44s %-22s %s -> %s"
+              % (where, row["metric"], row["from"], row["to"]))
+    if len(worse) > _MAX_LISTED_MOVES:
+        print("  UP  ... and %d more" % (len(worse) - _MAX_LISTED_MOVES))
+    if worse:
+        print("\n  Every UP line is the ratchet moving the wrong way: each of those values is\n"
+              "  now the permanent floor for that entity. Move the baseline after a real\n"
+              "  improvement, never to get past a failing commit.")
+
+
+def write_baseline(repo_root, target, settings):
+    thresholds, chars_per_token, exclude = settings
+    files, had_lizard = measure(repo_root, _all_supported(repo_root, exclude),
+                                chars_per_token)
+    if not had_lizard:
+        sys.stderr.write("code-health guard: lizard not available\n")
+        return 2
+    target = Path(target)
+    # Read the OUTGOING baseline before overwriting it -- that diff is the
+    # whole point of `update-baseline` printing what moved.
+    previous = load_json(target, {}).get("files") or {}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "schema": 1,
+        "head": _head(repo_root),
+        "thresholds": thresholds,
+        "files": files,
+    }, indent=2, sort_keys=True), encoding="utf-8")
+    print("code-health guard: baseline written for %d file(s)" % len(files))
+    report_baseline_moves(previous, files, baseline_moves(previous, files))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="guard.py")
     parser.add_argument("files", nargs="*")
@@ -467,28 +590,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
-    thresholds, chars_per_token, exclude = settings_for(repo_root)
+    settings = settings_for(repo_root)
+    thresholds, chars_per_token, exclude = settings
 
     if args.baseline:
-        targets = _all_supported(repo_root, exclude)
-        files, had_lizard = measure(repo_root, targets, chars_per_token)
-        if not had_lizard:
-            sys.stderr.write("code-health guard: lizard not available\n")
-            return 2
-        Path(args.baseline).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.baseline).write_text(json.dumps({
-            "schema": 1,
-            "head": _head(repo_root),
-            "thresholds": thresholds,
-            "files": files,
-        }, indent=2, sort_keys=True), encoding="utf-8")
-        print("code-health guard: baseline written for %d file(s)" % len(files))
-        return 0
+        return write_baseline(repo_root, args.baseline, settings)
 
     targets = _changed(repo_root) if args.check else list(args.files)
     targets = [t for t in targets
                if Path(t).suffix in SUPPORTED_EXT and not excluded(t, exclude)]
-    if not targets:
+    # The hook path exits before touching disk when a commit carries nothing
+    # this tool measures; `check` still has a threshold drift to announce.
+    if not targets and not args.check:
         return 0
 
     baseline_path = repo_root / BASELINE_RELPATH
@@ -498,12 +611,21 @@ def main(argv=None):
         return 0
 
     baseline = load_json(baseline_path, {"files": {}})
+    drift = threshold_drift(baseline.get("thresholds"), thresholds)
+    if args.check:
+        report_drift(drift)
+    if not targets:
+        return 0
     measured, had_lizard = measure(repo_root, targets, chars_per_token)
     if not had_lizard:
         print("code-health guard: lizard unavailable; file sizes checked only")
     violations = compare(measured, baseline, thresholds)
     if not violations:
         return 0
+    if not args.check:
+        # In the hook path drift is printed only alongside a failure, where
+        # it explains the ceiling; `check` announces it every time.
+        report_drift(drift)
     report(violations)
     return 1
 

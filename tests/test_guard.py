@@ -242,6 +242,75 @@ class BaselineTests(RatchetTests):
         self.assertIn("f", data["files"]["a.py"]["functions"])
 
 
+class PromisedReportTests(unittest.TestCase):
+    """DESIGN 10 and skills/guard/SKILL.md both promise two reports that did
+    not exist: `compare()` never read `baseline["thresholds"]` (the key was
+    written and never read), and `--baseline` overwrote the file before
+    anything could diff it."""
+
+    def setUp(self):
+        self.guard = load_guard()
+
+    def test_a_raised_threshold_is_reported_as_a_loosening(self):
+        moved = self.guard.threshold_drift(
+            {"file_lines": {"warn": 400, "hard": 800},
+             "function_lines": {"warn": 60, "hard": 100}},
+            {"file_lines": {"warn": 600, "hard": 800},
+             "function_lines": {"warn": 30, "hard": 100}})
+        by_metric = {row["metric"]: row for row in moved}
+        self.assertEqual(by_metric["file_lines"]["direction"], "loosened")
+        self.assertEqual(by_metric["function_lines"]["direction"], "tightened")
+
+    def test_unchanged_thresholds_report_nothing(self):
+        same = {"file_lines": {"warn": 400, "hard": 800}}
+        self.assertEqual(self.guard.threshold_drift(same, dict(same)), [])
+
+    def test_a_baseline_diff_separates_the_two_directions(self):
+        previous = {"a.py": {"lines": 100, "tokens": 500, "functions": {
+            "f": {"lines": 40, "ccn": 5, "params": 2, "nesting": 1}}}}
+        current = {"a.py": {"lines": 140, "tokens": 500, "functions": {
+            "f": {"lines": 20, "ccn": 9, "params": 2, "nesting": 1}}},
+            "b.py": {"lines": 10, "tokens": 40, "functions": {}}}
+        worse, better = self.guard.baseline_moves(previous, current)
+        self.assertEqual(
+            sorted((row["metric"], row["from"], row["to"]) for row in worse),
+            [("cyclomatic complexity", 5, 9), ("file lines", 100, 140)])
+        self.assertEqual([(row["metric"], row["from"], row["to"]) for row in better],
+                         [("function lines", 40, 20)])
+        # A file only in the new baseline is a new entity, not a movement.
+        self.assertNotIn("b.py", [row["path"] for row in worse + better])
+
+
+class GuardReportIntegrationTests(RatchetTests):
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_update_baseline_calls_out_what_moved_up(self):
+        target = self.root / ".code-health" / "baseline.json"
+        (self.root / "a.py").write_text("def f(a):\n    return a\n", encoding="utf-8")
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        (self.root / "a.py").write_text(
+            "def f(a, b, c):\n" + "    x = 1\n" * 40 + "    return a\n", encoding="utf-8")
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("UP", out.stdout)
+        self.assertIn("function lines", out.stdout)
+        self.assertIn("worsened", out.stdout)
+
+    def test_check_announces_a_raised_threshold_as_a_loosening(self):
+        self.baseline({"a.py": {"lines": 10, "tokens": 40, "functions": {}}})
+        # The fixture baseline above freezes no thresholds, so write a real
+        # one: the frozen copy is what drift is measured against.
+        path = self.root / ".code-health" / "baseline.json"
+        data = json.loads(path.read_text())
+        data["thresholds"] = {"file_lines": {"warn": 400, "hard": 800}}
+        path.write_text(json.dumps(data))
+        (self.root / ".code-health" / "config.json").write_text(
+            json.dumps({"thresholds": {"file_lines": {"warn": 700}}}))
+        self.write("a.py", 10)
+        out = run_guard("--check", "--repo", str(self.root), cwd=self.root)
+        self.assertIn("loosened", out.stdout)
+        self.assertIn("file_lines", out.stdout)
+
+
 class NestingTests(unittest.TestCase):
     """guard.py's own standalone AST nesting pass (it cannot import
     code_health). Reproduces, directly against guard's own code, the same
