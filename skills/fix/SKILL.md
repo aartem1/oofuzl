@@ -122,10 +122,12 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
    uncommitted" does not disentangle them — that is exactly what *never reset, overwrite, stash, or
    discard pre-existing user changes* (Hard rules) exists to prevent. The commit-time check in item 6
    below stays as a backstop, for a path the group's file list did not name.
-1. **Re-measure this dimension only**: `measure.py --layers <this group's layers> --files <this
-   group's files>`. `--layers` is resolved transitively; `--files` is **not** — it is an exact
-   membership filter, so the file list passed here must already name everything the group covers
-   (see `<plugin-root>/references/metrics.md`). Confirm the finding is still alive by matching this
+1. **Re-measure this dimension only**: `measure.py --layers <layers> --files <this group's files>`.
+   Translate the group's finding kinds into `--layers` values with the **finding kind → `--layers`
+   value** table in `<plugin-root>/references/metrics.md`. Do not pass the group's `layer` field:
+   that is `"L2"`/`"L3"`, a measurement tier, and `measure.py --layers L2` exits 2 with a usage
+   error. `--layers` is resolved transitively; `--files` is **not** — it is an exact membership
+   filter, so the file list passed here must already name everything the group covers. Confirm the finding is still alive by matching this
    group's `finding_ids`. If it is gone, mark the item `skipped` with the reason recorded and move to
    the next item — do not treat a stale ledger entry as still actionable.
 2. **Establish the narrow safety baseline before editing**, the same ladder a single-group fix

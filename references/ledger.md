@@ -54,7 +54,15 @@ for a second machine or a second contributor to inherit verbatim.
 
 ## Group identity: `gid` versus `label`
 
-`gid` is **content-derived**: `"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`. `label`
+`gid` is **content-derived**: `"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`. Finding
+ids follow the same shape where a finding has no single subject path: a near-duplicate cluster's id
+is `near_duplicate:cluster/<sha1 of the cluster's sorted `file:function` members>[:8]`, matching the
+example above. "Stable across runs" means *the same code always produces the same id* — it is not a
+claim that an id survives the code changing. A cluster that gained or lost a member is a different
+cluster, and its id says so, which is exactly what makes a group that genuinely vanished detectable
+instead of silently substituted. What the id must never depend on is anything other than content:
+the first form of this id keyed on `members[0].filename` from an unsorted list, so two runs over
+identical code could disagree. `label`
 (`A1…An`) is a **display convenience only** — a fresh, priority-ordered assignment made by every
 `audit` run, not a stable identifier.
 
@@ -106,3 +114,18 @@ locators: file paths, function names, finding ids, metric values, and Sonar issu
 than trusting the ledger's snapshot values, because the repository may have changed since the audit
 that wrote them (including via an earlier item in the same queue). One file per project; each audit
 overwrites it, carrying forward whatever `queue` was not yet fully done.
+
+## Carrying the queue across an audit
+
+An `audit` that finds an existing ledger **carries its `queue` forward unchanged** — every item, in
+order, with its state, commit SHA and note untouched — and overwrites only `audit` and `groups`.
+
+**Unless every item is already `done`, `skipped` or `failed`.** That queue is finished, and the
+correct action is to *drop* it: write the new ledger with **no `queue` key at all**. Carrying a
+finished queue forward makes `/code-health:fix --resume` find a queue with nothing to resume and
+report it as an interrupted run, and it leaves a stale `baseline_summary` from a cycle that ended
+around to be compared against by the next one. A finished queue is history, and this file is a
+locator for present work, not a log — the commits the queue produced are the record.
+
+An item in state `running` is **not** finished (see below); a queue holding one is carried forward
+so `--resume` can recover it.

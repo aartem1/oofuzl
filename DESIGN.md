@@ -442,7 +442,7 @@ that depends on churn is likewise `not_measured` — never a silent zero.
 |---|---|---|
 | `hotspot` | `commits_in_window × sum(ccn of functions in file)`, reported with both percentile ranks | Tornhill's product: complex code nobody touches is not the problem |
 | `symbol_collisions` | Symbol names (lizard functions, plus Python classes and functions from the `ast` pass) defined in ≥ `collision_min_files` distinct files (default 3), ranked by `count × avg_definition_tokens` | The agent greps a name, gets N hits, reads the wrong definition |
-| `edit_fanout` | `mean(other files in commits touching f) / median(other files per commit, repo-wide)` | A ratio, not a raw count — the raw count is dominated by the repository's commit-size habits rather than by the file. `> 1` means editing here drags in more than a typical commit does |
+| `edit_fanout` | `mean(other files in commits touching f)` divided by the repository-wide **median** other-files-per-commit, falling back to the **mean** when that median is `0`; the denominator actually used is reported as `edit_fanout_basis` (`median` / `mean` / `unavailable`) | A ratio, not a raw count — the raw count is dominated by the repository's commit-size habits rather than by the file. `> 1` means editing here drags in more than a typical commit does |
 
 ## 6. Configuration — `.code-health/config.json` (target repo, committed)
 
@@ -533,7 +533,10 @@ uncommitted changes, and the user chooses retry or skip. It is never silently re
 
 The ledger never stores source snippets, tokens, credentials, or raw API dumps. It is a **locator,
 not a source of truth**: `fix` re-measures before editing. One file per project, overwritten by
-each audit, with any not-fully-done `queue` carried over.
+each audit, with any not-fully-done `queue` carried over. A queue in which **every** item is
+`done`/`skipped`/`failed` is finished: it is dropped rather than carried, and the new ledger is
+written with no `queue` key at all, so the next `fix` builds a fresh one instead of resuming a
+queue with nothing left to do.
 
 ## 8. `/code-health:audit`
 
@@ -588,7 +591,12 @@ actual write to the profile is announced in the report (§12).
 | `near_duplicate`, `exact_clone` | the cluster, one group per cluster | "cache protocol copied into 16 files" |
 | `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
 | `dead_symbol` | the owning module or package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
+| Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
 | `hotspot`, `edit_fanout`, `symbol_collision` | never their own group — they **re-rank** other groups and appear as evidence in `why` | — |
+
+Sonar issues are in the table because they need a grouping rule as much as the L2 kinds do and the
+audit skill had to invent one in its absence. How a re-ranking finding is nevertheless *referenced*
+by a group — never creating one — is stated in `references/ledger.md`.
 
 **Parameter-set clustering** for `too_many_params`, since lizard gives only a count and a
 `long_name` string: the Python `ast` pass emits each function's ordered parameter-name tuple;
@@ -1091,6 +1099,11 @@ Three criteria that are not numbers:
    per audited repository. The alternative is a shared profile with plugin-default thresholds that
    repo config cannot influence.
 5. **`edit_fanout` earns the least of the four derived metrics.** It is kept because it was
-   specified, and normalized against the repo's median commit size so it measures the file rather
-   than the team's commit habits. If it proves noisy on the first real audit, it is the first thing
-   to cut.
+   specified, and normalized against the repository's own commit size so it measures the file rather
+   than the team's commit habits. The median is the intended denominator and the mean is a
+   documented fallback: measured on this plugin's own history, 35 of 64 commits touch exactly one
+   file, so the median other-files-per-commit is `0` and dividing by it collapsed all 79 ratios to
+   `0.0` while `mean_co_changed` was genuinely non-zero — a column of zeros that still looks like
+   data. `edit_fanout_basis` says which denominator was used, and a ratio that cannot be computed
+   at all is `null`, never `0.0`. If it proves noisy on the first real audit, it is still the first
+   thing to cut.

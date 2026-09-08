@@ -230,8 +230,14 @@ locator-not-source-of-truth rules; do not restate the schema from memory.
   plugin generation, mention it once so the user can delete it — do not migrate or delete it
   yourself.
 - If a ledger already exists for this project, read it first and **carry its `queue` forward
-  unchanged** unless every item in it is `done`/`skipped`/`failed`. Overwrite `audit` and `groups`
-  with this run's fresh results; never touch `queue` items beyond preserving them.
+  unchanged** — every item, in order, with its state and commit SHA untouched. Overwrite `audit` and
+  `groups` with this run's fresh results; never touch `queue` items beyond preserving them.
+- **If every item in that queue is `done`/`skipped`/`failed`, the queue is finished: drop it.**
+  Write the new ledger with no `queue` key at all. Carrying a finished queue forward makes
+  `/code-health:fix --resume` find a queue with nothing to resume, and leaves a stale
+  `baseline_summary` from an ended cycle for the next one to compare against. An item in state
+  `running` is not finished — a queue holding one is carried forward so `--resume` can recover it.
+  See "Carrying the queue across an audit" in `<plugin-root>/references/ledger.md`.
 - Store only locators (paths, function names, finding/issue/rule ids, metric values) — never
   source snippets, secrets, or raw API dumps.
 

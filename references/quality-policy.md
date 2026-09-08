@@ -126,7 +126,12 @@ Sonar-shaped groups below.
   arbitrary one. Fan-out is a ratio against the repository's own median commit size, not a raw
   count, because the raw count is dominated by the team's commit-size habits rather than by the
   file: editing a file whose edits routinely drag in more than a typical commit (`ratio > 1`) is
-  itself a design smell an agent cannot fix by writing better code in isolation.
+  itself a design smell an agent cannot fix by writing better code in isolation. Read
+  `edit_fanout_basis` before quoting a ratio: the median is the intended denominator, but a
+  repository whose typical commit touches one file has a median of `0`, and the measurer falls back
+  to the **mean** rather than reporting a column of zeros. `median` and `mean` are not the same
+  scale — a `ratio > 1` against the mean is a weaker signal than the same number against the
+  median. `unavailable` means no ratio was computed and none should be quoted.
 
 **These three never form their own ledger group.** Hotspots, fan-out, and symbol collisions
 re-rank the groups above instead — a `Fix first` entry's priority moves because of them, and they

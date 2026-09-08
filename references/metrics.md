@@ -59,6 +59,27 @@ per function, and is never fed into `file_tokens` — the two numbers are not in
 only knob is the numeric `chars_per_token`; there is no mode switch, because a mode that changed the
 unit would silently invalidate every threshold in this table.
 
+## Finding kind → `--layers` value
+
+`measure.py --layers` takes **layer names**, not the `layer` field a ledger group carries. A group
+records `"layer": "L2"`, and `measure.py --layers L2` exits 2 with a usage error — so re-measuring
+one group's dimension (`fix` step 3.1) needs this table, which is the only place the mapping is
+written down.
+
+| Finding kind | `--layers` value |
+|---|---|
+| `file_too_long`, `file_too_expensive` | `size` |
+| `function_too_long`, `function_too_complex`, `too_many_params`, `too_deep_nesting` | `size` |
+| `near_duplicate`, `exact_clone` | `dup` |
+| `import_cycle` | `imports` |
+| `dead_symbol` | `dead` |
+| `hotspot`, `symbol_collision`, `edit_fanout` | `derived` |
+
+Pass the values for every kind in the group, comma-separated. Dependencies resolve transitively —
+`--layers dup` pulls in `size`, `--layers derived` pulls in `size`, `churn` and `imports` — so
+naming the kind's own layer is always enough. `--files` does **not** resolve transitively: it is an
+exact membership filter, so the file list must already name everything the group covers.
+
 ## Metrics outside `config.thresholds`
 
 These are not in the threshold table because they are not single-value/threshold metrics — they
@@ -71,8 +92,8 @@ configuration.
 | `import_cycle` | L2, Python `ast` pass (exact) or `madge --json` for JS/TS | An import cycle: module A imports B which (directly or transitively) imports A again | A cycle means there is no safe order to read the modules in isolation — understanding either one requires already understanding the other — and it is exactly the shape that produces circular-import runtime errors when an agent reorganizes imports without noticing the cycle. |
 | `dead_symbol` | L2, `vulture` (Python, `--min-confidence 80`); **JS/TS is `not_measured`** — knip's JSON output is not parsed (`<plugin-root>/references/tools.md`) | A function, class, or export with no detected reference elsewhere in the repository | Dead code is a false trail: the agent reads it, assumes it matters because it is in the codebase, and spends budget understanding something nothing calls. Both tools have known false positives on dynamic dispatch, so a finding here is evidence to inspect, not a certainty — grouped by owning module/package and capped at `P2` for that reason (`<plugin-root>/references/quality-policy.md`). |
 | `hotspot` | L3, derived from L2 size + churn | `commits_in_window × sum(ccn of functions in file)`, reported with both percentile ranks | Tornhill's product: complex code nobody touches is not urgent, but the same complexity in a file changed 40 times in the churn window is the highest-risk place in the repository for an agent to be asked to change something. Never its own group — it re-ranks other groups (`<plugin-root>/references/quality-policy.md`). |
-| `symbol_collision` | L3, derived from L2 (lizard functions plus Python `ast`-pass classes/functions); config: `collision_min_files` (default 3) | A symbol name defined in `collision_min_files` or more distinct files, ranked by `count × avg_definition_tokens` | The agent greps a name, gets N hits across files, and has to disambiguate which definition is actually in scope for the call site it is editing — silently picking the wrong one is a correctness bug the agent will not notice it made. Never its own group. |
-| `edit_fanout` | L3, derived from L2 churn | `mean(other files in commits touching f) / median(other files per commit, repo-wide)` — a ratio, not a raw count | The raw co-change count is dominated by the repository's own commit-size habits rather than by the file; the ratio isolates the file. `> 1` means an edit here routinely drags in more files than a typical commit does — the file is coupled to more of the codebase than its own size suggests. Never its own group. |
+| `symbol_collision` | L3, derived from the **Python `ast` pass only** (`imports.symbols`: classes and functions defined in `inventory.source`, tests excluded, minus a short convention-name list — `__init__`, `main`, `setUp`, `tearDown`, `__str__`, `__repr__`); config: `collision_min_files` (default 3) | A symbol name defined in `collision_min_files` or more distinct files, ranked by `count × avg_definition_tokens`. **Not measured for a repository with no Python**: `imports` reports `not_measured` there and `derived.symbol_collisions` comes back `null` with `derived.status: partial`, never an empty list. lizard's function rows are *not* a second source — they were never fed into this table | The agent greps a name, gets N hits across files, and has to disambiguate which definition is actually in scope for the call site it is editing — silently picking the wrong one is a correctness bug the agent will not notice it made. Never its own group. |
+| `edit_fanout` | L3, derived from L2 churn | `mean(other files in commits touching f)` divided by the repository-wide **median** other-files-per-commit, falling back to the **mean** when that median is `0`; the denominator actually used is reported as `edit_fanout_basis` (`median` / `mean` / `unavailable`) — a ratio, not a raw count. A ratio that cannot be computed at all is `null`, never `0.0` | The raw co-change count is dominated by the repository's own commit-size habits rather than by the file; the ratio isolates the file. `> 1` means an edit here routinely drags in more files than a typical commit does — the file is coupled to more of the codebase than its own size suggests. Never its own group. |
 
 `hotspot`, `symbol_collision`, and `edit_fanout` share one rule, stated once here and enforced by
 `<plugin-root>/references/quality-policy.md`: they never form their own ledger group. They re-rank

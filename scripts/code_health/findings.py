@@ -1,5 +1,6 @@
 """Turn measured values into findings, and measured files into a summary."""
 
+import hashlib
 from collections import namedtuple
 
 from . import config as _config
@@ -120,15 +121,30 @@ def size_findings(layer, cfg):
     return out
 
 
+def _cluster_id(cluster):
+    """`cluster/<8 hex>` over the cluster's sorted membership.
+
+    The old form was `cluster/<size>/<members[0].filename>`, and `members`
+    is not sorted -- the id depended on the order the clustering pass
+    happened to emit its members in, so two runs over identical code could
+    disagree. `references/ledger.md`'s own example is `cluster/7f3a91c4`,
+    which this now matches, and the digest is content-derived exactly like
+    a group's `gid`: the same code always produces the same id, and a
+    cluster whose membership genuinely changed is a different cluster,
+    which is what makes a vanished one detectable rather than silently
+    substituted.
+    """
+    members = sorted("%s:%s" % (m["filename"], m["function_name"])
+                     for m in cluster.get("members", []))
+    digest = hashlib.sha1("\n".join(members).encode("utf-8")).hexdigest()
+    return "cluster/%s" % digest[:8]
+
+
 def duplicate_findings(near, cfg):
     out = []
-    for index, cluster in enumerate((near or {}).get("clusters", [])):
-        subject_id = "cluster/%d/%s" % (
-            cluster["size"],
-            cluster["members"][0]["filename"] if cluster["members"] else index,
-        )
+    for cluster in (near or {}).get("clusters", []):
         out.append({
-            "id": "near_duplicate:%s" % subject_id,
+            "id": "near_duplicate:%s" % _cluster_id(cluster),
             "kind": "near_duplicate",
             "layer": "L2",
             "level": "warn",
