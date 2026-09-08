@@ -53,7 +53,7 @@ Two v0.2.0 rules are **not** touched by this reversal and stay exactly as strict
 The commit stages **only the exact paths the subagent touched** for this group — never `git add -A`,
 never `git commit -a`. Any of those paths that was already dirty at cycle start makes the item abort
 instead of committing: the plugin has no way to separate its own edit from the user's inside one
-already-modified file, so it does not try.
+already-modified file, so it does not try. An abort at that point stops the cycle (step 3, item 7).
 
 ## 1. Resolve the invocation and the queue
 
@@ -156,17 +156,34 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
 6. **Commit on a pass.** Stage only the exact paths the subagent touched for this group — never
    `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). This is the
    **backstop** for a path outside the group's declared file list — one item 0's comparison could
-   not catch because the subagent touched it without it being named. If any of the paths the
-   subagent actually touched was already dirty at cycle start, abort this item instead of
-   committing: mark it `failed`, leave the edits uncommitted, and continue to the next item rather
-   than the whole cycle. On success, mark the item `done` with the commit SHA.
-7. **A red gate stops the whole cycle.** This group's edits stay uncommitted; nothing already
-   committed by an earlier item in this cycle is reverted. The human decides what happens next.
+   not catch because the subagent touched it without it being named. On success, mark the item
+   `done` with the commit SHA.
+7. **An item that aborts stops the whole cycle**, exactly as a red gate does. Three things abort an
+   item after its subagent has already edited: a path the subagent touched was already dirty at
+   cycle start (item 6's backstop), an anti-gaming hit (step 4), or a red gate (item 4 of this
+   step). In all three the edits stay uncommitted, the item is marked `failed`, nothing already committed by an
+   earlier item is reverted, and the run ends with the announcement in step 5. The human decides
+   what happens next.
+
+   **Why the cycle stops rather than continuing to the next item.** The aborted item's edits are
+   still in the working tree, and every later item would be measured against them:
+
+   - Item N+1's step-0 dirty check compares against the paths recorded at *cycle start*, which do
+     not include what item N just dirtied — so if the two items share a file, item N's rejected
+     edits get staged and committed under item N+1's SHA, by the very rule (item 6) that exists to
+     stop exactly that.
+   - `queue.baseline_summary` was snapshotted at cycle start and is now stale: the anti-gaming
+     check for every later item compares the repository against a state that no longer exists.
+   - Item N+1's gate run would validate item N's rejected work as if it were the baseline.
+
+   Adding the aborted item's paths to the recorded dirty set fixes only the first of those three.
+   Stopping fixes all three, and it is what step 4 and the red-gate rule already do — the earlier
+   "continue to the next item" was the odd one out.
 
 ## 4. Anti-gaming check
 
 Run against each group's diff, before its commit in step 3. Any hit ⇒ reject: edits stay
-uncommitted, the item is marked `failed`, and the cycle stops (step 3).
+uncommitted, the item is marked `failed`, and the cycle stops (step 3, item 7).
 
 1. Test files deleted; test functions removed; `skip` / `xfail` / `.skip` / `.only` /
    `pytest.mark.skip` added; assertions weakened to tautologies.

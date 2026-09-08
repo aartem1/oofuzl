@@ -650,7 +650,9 @@ Two v0.2.0 rules are **not** relaxed by it, and are restored verbatim:
 
 The commit stages **only the exact paths the subagent touched**, never `git add -A` or
 `git commit -a`. Any of those paths that was already dirty at cycle start makes the item abort
-rather than commit, because the plugin cannot separate its work from the user's inside one file.
+rather than commit, because the plugin cannot separate its work from the user's inside one file —
+and an abort at that point stops the cycle (§9 step 7), because the aborted edits are still sitting
+in the working tree where the next item would inherit them.
 
 ### Cycle start, once
 
@@ -706,8 +708,14 @@ rather than commit, because the plugin cannot separate its work from the user's 
    the baseline, never to the fix.
 5. **Re-measure and reject gaming** (below), including `summary` against `queue.baseline_summary`.
 6. **Commit** the touched paths, one commit per group; mark `done` with the SHA.
-7. **Gate red ⇒ the cycle stops.** This group's edits stay uncommitted. Nothing is reverted
-   automatically. The human decides.
+7. **Any abort after the subagent has edited stops the cycle** — a red gate, an anti-gaming hit, or
+   a touched path that was already dirty at cycle start. The item is marked `failed`, its edits stay
+   uncommitted, nothing is reverted automatically, and the human decides. It stops rather than
+   continuing because the aborted edits remain in the working tree: item N+1's step-0 dirty check
+   compares against the paths recorded at *cycle start* and would let them be committed under the
+   next item's SHA, `queue.baseline_summary` is stale for every later item, and the next gate run
+   would validate the rejected work as baseline. Adding the aborted paths to the dirty set fixes
+   only the first of the three.
 
 Work happens in the **main working tree, no worktree** — the gate needs installed dependencies. The
 queue survives the session, which is what `--resume` reads.
