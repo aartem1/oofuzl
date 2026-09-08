@@ -109,7 +109,7 @@ def build_summary(layer, inventory, cfg):
         by_cut[str(cut)] = {
             "files": len(hit),
             "loc": cut_loc,
-            "loc_pct": (cut_loc / loc * 100) if loc else 0.0,
+            "loc_pct": round(cut_loc / loc * 100, 1) if loc else 0.0,
         }
 
     test_files = layer.get("test_files", [])

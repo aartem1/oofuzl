@@ -71,7 +71,10 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary["by_cut"]["800"]["files"], 2)
         self.assertEqual(summary["by_cut"]["400"]["files"], 3)
         self.assertEqual(summary["loc"], 2700)
-        self.assertAlmostEqual(summary["by_cut"]["1000"]["loc_pct"], 1200 / 2700 * 100, places=4)
+        # One decimal, matching the spec's own example (`"loc_pct": 42.5`) and
+        # the figure the report quotes. Anyone needing full precision has both
+        # `loc` and the cut's `loc` in the same document.
+        self.assertEqual(summary["by_cut"]["1000"]["loc_pct"], 44.4)
 
 
 class CliTests(unittest.TestCase):
@@ -91,6 +94,19 @@ class CliTests(unittest.TestCase):
             self.assertIn(layer["status"], ("measured", "partial", "not_measured"), name)
             if layer["status"] != "measured":
                 self.assertTrue(layer.get("reason"), name)
+
+    def test_nonexistent_repo_is_a_usage_error(self):
+        # Exit 0 with an all-zero document would tell a user their repository
+        # is empty. "Valid document produced" is the exit-0 contract, and no
+        # document can be produced for a path that is not there.
+        proc = subprocess.run(
+            [sys.executable, str(PLUGIN_ROOT / "scripts" / "measure.py"),
+             "--repo", "/nonexistent/path/xyz"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("not a directory", proc.stderr)
 
     def test_exit_is_zero_even_with_findings(self):
         repo = Path(tempfile.mkdtemp())

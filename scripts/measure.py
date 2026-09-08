@@ -52,6 +52,8 @@ def parse_args(argv=None):
 
 def build_document(args):
     repo_root = Path(args.repo).resolve()
+    if not repo_root.is_dir():
+        raise ValueError("--repo is not a directory: %s" % args.repo)
     cfg = C.load_config(repo_root, args.config)
     wanted = F.resolve_layers([n.strip() for n in args.layers.split(",") if n.strip()])
     inventory = D.enumerate_files(repo_root, cfg, restrict=args.files)
