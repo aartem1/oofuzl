@@ -133,6 +133,62 @@ class FunctionRatchetTests(RatchetTests):
         out = run_guard("a.py", cwd=self.root)
         self.assertEqual(out.returncode, 1)
 
+    # --- same-named functions in one file -------------------------------
+    # lizard reports BARE names for Python methods, so two `handler`
+    # methods in one file used to collapse into one baseline entry, last
+    # row winning: a 201-line `A.handler` plus a 2-line `B.handler`
+    # recorded `{"handler": {"lines": 2}}`, the hook exited 0, and the
+    # audit reported `function_too_long handler 201 >= 100` on a function
+    # the ratchet could no longer see. Appending a tiny same-named
+    # function was enough to hide an arbitrarily large one forever.
+
+    def write_two_handlers(self, big_body_lines):
+        body = "class A:\n    def handler(self):\n" + "".join(
+            "        x = %d\n" % i for i in range(big_body_lines))
+        body += "\n\nclass B:\n    def handler(self):\n        return 1\n"
+        (self.root / "m.py").write_text(body, encoding="utf-8")
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_both_same_named_functions_reach_the_baseline(self):
+        self.write_two_handlers(199)
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        funcs = json.loads(target.read_text())["files"]["m.py"]["functions"]
+        self.assertEqual(sorted(funcs), ["handler", "handler#2"])
+        # Order of appearance, not lizard's row order: the big one is first.
+        self.assertEqual(funcs["handler"]["lines"], 200)
+        self.assertEqual(funcs["handler#2"]["lines"], 2)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_the_large_same_named_function_is_still_ratcheted(self):
+        self.baseline({"m.py": {"lines": 210, "tokens": 2000, "functions": {
+            "handler": {"lines": 200, "ccn": 1, "params": 1, "nesting": 0},
+            "handler#2": {"lines": 2, "ccn": 1, "params": 1, "nesting": 0}}}})
+        self.write_two_handlers(199)
+        self.assertEqual(run_guard("m.py", cwd=self.root).returncode, 0)
+        self.write_two_handlers(200)
+        out = run_guard("m.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("handler", out.stdout)
+        self.assertIn("201", out.stdout)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_a_line_shift_above_a_function_does_not_make_it_new(self):
+        """Why the key is order-of-appearance and not `(name, start_line)`
+        or lizard's `location`: adding one import line at the top moves
+        every function down one line. Under a line-bearing key a
+        grandfathered 200-line function would read as new and face
+        `function_lines.warn` (60), failing a commit that never touched
+        it."""
+        self.baseline({"a.py": {"lines": 400, "tokens": 2000, "functions": {
+            "grandfathered": {"lines": 200, "ccn": 1, "params": 1, "nesting": 0}}}})
+        body = "def grandfathered(a):\n" + "".join(
+            "    x = %d\n" % i for i in range(199))
+        (self.root / "a.py").write_text("import os\n" + body, encoding="utf-8")
+        out = run_guard("a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
 
 class BaselineTests(RatchetTests):
     def test_baseline_write_covers_files_and_functions(self):

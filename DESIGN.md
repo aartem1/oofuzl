@@ -775,7 +775,9 @@ With confirmation, in this order:
     "backend/reports.py": {
       "lines": 1467, "tokens": 21300,
       "functions": {
-        "compute_summary_payload": { "lines": 211, "ccn": 18, "params": 19, "nesting": 3 }
+        "compute_summary_payload": { "lines": 211, "ccn": 18, "params": 19, "nesting": 3 },
+        "handler":   { "lines": 201, "ccn": 12, "params": 3, "nesting": 2 },
+        "handler#2": { "lines": 2,   "ccn": 1,  "params": 1, "nesting": 0 }
       }
     }
   }
@@ -794,9 +796,20 @@ is the whole rule — there is no separate case for new code, and deliberately s
 800-line file through while failing an existing 401-line file. `hard` is used by `audit` for
 prioritization and by §12 for Sonar; `guard` does not need it.
 
-A function is matched to its baseline by `file path + function name`. A rename counts as a new
-entity and faces `warn` — deliberate: a rename is the moment not to carry the old size forward, and
-fuzzy matching makes the ratchet unpredictable.
+A function is matched to its baseline by `file path + function name`, **disambiguated by order of
+appearance when the name is not unique in that file** — the second `handler` in a file is keyed
+`handler#2`. lizard reports bare names for Python methods, so `A.handler` and `B.handler` both
+arrive as `handler`; keying on the bare name collapsed them into one entry with the last row
+winning, and a 201-line method next to a 2-line one recorded `{"handler": {"lines": 2}}` — the large
+one vanished from the ratchet permanently, while the audit still reported it. The key deliberately
+carries no line number (neither `start_line` nor lizard's `location`): adding one `import` line at
+the top of a file moves every function down one line, and under a line-bearing key a grandfathered
+200-line function would read as new, drop its ceiling from 200 to `function_lines.warn` (60), and
+fail a commit that never touched it.
+
+A rename counts as a new entity and faces `warn` — deliberate: a rename is the moment not to carry
+the old size forward, and fuzzy matching makes the ratchet unpredictable. Reordering two same-named
+functions reads the same way, for the same reason.
 
 **Which thresholds apply:** the current `.code-health/config.json`, not the frozen copy. The frozen
 copy exists so drift can be reported — lowering a threshold immediately tightens the ceiling, which

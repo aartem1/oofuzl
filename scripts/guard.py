@@ -226,10 +226,9 @@ def settings_for(repo_root):
     return merged, cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN), cfg.get("exclude", [])
 
 
-def measure(repo_root, relpaths, chars_per_token):
-    repo_root = Path(repo_root)
-    files = {}
-    python_nesting = {}
+def _read_files(repo_root, relpaths, chars_per_token):
+    """File-level measurements plus the Python nesting map, from disk only."""
+    files, python_nesting = {}, {}
     for rel in relpaths:
         try:
             text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
@@ -242,30 +241,77 @@ def measure(repo_root, relpaths, chars_per_token):
         }
         if rel.endswith(".py"):
             python_nesting[rel] = _python_nesting(text)
+    return files, python_nesting
+
+
+def _lizard_rows(repo_root, argv, relpaths):
+    proc = subprocess.run(argv + ["-ENS", "--csv"] + list(relpaths),
+                          cwd=str(repo_root), capture_output=True, text=True)
+    return parse_lizard_csv(proc.stdout)
+
+
+def _nesting_for(row, python_nesting):
+    ext = Path(row["filename"]).suffix
+    if ext == ".py":
+        # Lizard's own Python nesting column is a monotonically increasing
+        # counter across the whole invocation (verified in sizes.py /
+        # references/tools.md), never trusted here. A row whose start line
+        # has no match in `_python_nesting` (should be rare; see
+        # pyast.measure_nesting) is `None`, not a guess.
+        return python_nesting.get(row["filename"], {}).get(row["start_line"])
+    if ext in _LIZARD_NESTING_OK_EXT:
+        return row["nesting"]
+    return None
+
+
+def function_key(existing, name):
+    """The baseline key for one function row: its name, disambiguated by
+    order of appearance in the file when the name is not unique there.
+
+    lizard reports BARE names for Python methods -- `A.handler` and
+    `B.handler` both arrive as `handler` (verified: two rows, one
+    `function_name`). Keying the baseline on the bare name collapsed them
+    into one entry, last row winning, so a 201-line method and a 2-line
+    method in one file recorded `{"handler": {"lines": 2}}` and the
+    201-line one vanished from the ratchet permanently -- appending a tiny
+    same-named function was enough to hide an arbitrarily large one.
+
+    The key is deliberately NOT `(name, start_line)` or lizard's `location`
+    field, both of which carry line numbers. Demonstrated: adding one
+    `import` line at the top of a file moves a 200-line grandfathered
+    function from line 1 to line 2, which under a line-bearing key reads as
+    a NEW entity and drops its ceiling from 200 to `function_lines.warn`
+    (60) -- failing a commit that never touched it. Order of appearance
+    survives every edit above the function and still separates same-named
+    siblings; only reordering them reads as new, which is the same
+    behaviour a rename already has.
+    """
+    if name not in existing:
+        return name
+    index = 2
+    while "%s#%d" % (name, index) in existing:
+        index += 1
+    return "%s#%d" % (name, index)
+
+
+def measure(repo_root, relpaths, chars_per_token):
+    repo_root = Path(repo_root)
+    files, python_nesting = _read_files(repo_root, relpaths, chars_per_token)
     argv = resolve_lizard()
     if argv is None or not files:
         return files, argv is not None
-    proc = subprocess.run(argv + ["-ENS", "--csv"] + list(files),
-                          cwd=str(repo_root), capture_output=True, text=True)
-    for row in parse_lizard_csv(proc.stdout):
+    rows = _lizard_rows(repo_root, argv, list(files))
+    # lizard does not emit rows in source order (a nested function precedes
+    # its parent), and `function_key` numbers duplicates by appearance, so
+    # the ordering has to be imposed here or the key would depend on
+    # lizard's internal traversal.
+    for row in sorted(rows, key=lambda r: (r["filename"], r["start_line"])):
         entry = files.get(row["filename"])
         if entry is None:
             continue
-        ext = Path(row["filename"]).suffix
-        if ext == ".py":
-            # Lizard's own Python nesting column is a monotonically
-            # increasing counter across the whole invocation (verified in
-            # sizes.py / references/tools.md), never trusted here. A row
-            # whose start line has no match in `_python_nesting` (should be
-            # rare; see pyast.measure_nesting) is `None`, not a guess.
-            nesting = python_nesting.get(row["filename"], {}).get(row["start_line"])
-        elif ext in _LIZARD_NESTING_OK_EXT:
-            nesting = row["nesting"]
-        else:
-            nesting = None
-        entry["functions"][row["function_name"]] = {
+        entry["functions"][function_key(entry["functions"], row["function_name"])] = {
             "lines": row["length"], "ccn": row["ccn"],
-            "params": row["param"], "nesting": nesting,
+            "params": row["param"], "nesting": _nesting_for(row, python_nesting),
         }
     return files, True
 

@@ -42,9 +42,16 @@ entities against `hard` instead) is *more* permissive for new code than for old:
 brand-new 800-line file through while failing an existing 401-line one that has carried its size
 for years. New code does not get a looser bar than old code; if anything the reverse is intended.
 
-A function is matched to its baseline by **file path + function name**. A rename counts as a new
-entity and faces `warn`, not the old size — deliberate: a rename is exactly the moment not to carry
-the previous size forward, and fuzzy name matching would make the ratchet unpredictable.
+A function is matched to its baseline by **file path + function name**, disambiguated by order of
+appearance when that name is not unique in the file — the second `handler` in a file is keyed
+`handler#2`. lizard reports bare names for Python methods, so without that suffix two `handler`
+methods in one file collapse into a single baseline entry and the larger one stops being ratcheted
+at all. The key carries no line number on purpose: a line-bearing key would turn every function
+below an added `import` line into a "new" entity facing `warn`.
+
+A rename counts as a new entity and faces `warn`, not the old size — deliberate: a rename is exactly
+the moment not to carry the previous size forward, and fuzzy name matching would make the ratchet
+unpredictable. Reordering two same-named functions reads the same way.
 
 ## 2. Which thresholds apply
 
