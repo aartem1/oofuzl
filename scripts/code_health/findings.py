@@ -134,6 +134,20 @@ def cycle_findings(layer):
     return out
 
 
+def derived_findings(layer, cfg):
+    out = []
+    for row in layer.get("symbol_collisions", []):
+        out.append({
+            "id": "symbol_collision:%s" % row["name"],
+            "kind": "symbol_collision", "layer": "L3", "level": "warn",
+            "subject": {"symbol": row["name"], "files": row["paths"]},
+            "metric": "symbol_collision", "value": row["files"],
+            "threshold": cfg["collision_min_files"],
+            "evidence": {"avg_tokens": row["avg_tokens"]},
+        })
+    return out
+
+
 def build_summary(layer, inventory, cfg):
     files = layer.get("files", [])
     loc = sum(row["lines"] for row in files)

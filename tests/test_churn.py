@@ -114,6 +114,21 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(layer["window_days"], 180)
         self.assertLessEqual(layer["history_span_days"], 1)
 
+    def test_mean_co_changed_counts_other_files_only(self):
+        root = make_repo()
+        for name in ("a.py", "b.py", "c.py"):
+            (root / name).write_text("x = 1\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-qm", "three together")   # a, b, c -> 2 others each
+        (root / "a.py").write_text("x = 2\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-qm", "a alone")          # a -> 0 others
+        cfg = C.load_config(root)
+        layer = CH.measure_churn(root, cfg, {"a.py", "b.py", "c.py"})
+        means = {row["path"]: row["mean_co_changed"] for row in layer["files"]}
+        self.assertEqual(means["a.py"], 1.0)   # (2 + 0) / 2
+        self.assertEqual(means["b.py"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from code_health import config as C          # noqa: E402
 from code_health import churn as CH          # noqa: E402
+from code_health import derived as DV        # noqa: E402
 from code_health import discovery as D       # noqa: E402
 from code_health import dup as DUP           # noqa: E402
 from code_health import findings as F        # noqa: E402
@@ -78,7 +79,11 @@ def build_document(args):
     if "imports" in wanted:
         layers["imports"] = PA.measure_imports(repo_root, inventory, cfg)
         all_findings.extend(F.cycle_findings(layers["imports"]))
-    for name in ("dead", "derived"):
+    if "derived" in wanted:
+        layers["derived"] = DV.measure_derived(
+            layers["size"], layers["churn"], layers["imports"], cfg)
+        all_findings.extend(F.derived_findings(layers["derived"], cfg))
+    for name in ("dead",):
         if name in wanted:
             layers[name] = F.empty_layer("not implemented yet")
 

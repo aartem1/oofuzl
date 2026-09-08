@@ -130,6 +130,17 @@ def measure_churn(repo_root, cfg, present_paths):
     rows = [dict(stats, path=path) for path, stats in per_file.items()
             if path in present_paths]
     rows.sort(key=lambda row: (-row["commits"], row["path"]))
+
+    co_changed = {}
+    for commit in commits:
+        others = len(commit["paths"]) - 1
+        for path in commit["paths"]:
+            bucket = co_changed.setdefault(path, [])
+            bucket.append(others)
+    for row in rows:
+        samples = co_changed.get(row["path"], [])
+        row["mean_co_changed"] = (sum(samples) / float(len(samples))) if samples else 0.0
+
     return {
         "status": "measured",
         "window_days": window,
