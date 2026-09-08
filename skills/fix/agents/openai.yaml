@@ -1,4 +1,4 @@
 interface:
-  display_name: "Fix Sonar Finding"
-  short_description: "Безопасное исправление выбранной проблемы Sonar"
-  default_prompt: "Use $fix A1 to safely fix the selected Sonar audit group in a fresh session and verify that behavior and code quality did not regress."
+  display_name: "Fix Code Health Group"
+  short_description: "Исправление групп из книги долга с гейтом"
+  default_prompt: "Use $fix A1 to burn one debt-ledger group with the project's own test gate, or $fix --p0 to run the whole P0 queue."

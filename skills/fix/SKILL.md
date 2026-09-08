@@ -1,115 +1,207 @@
 ---
 name: fix
-description: Safely fix only user-selected SonarQube findings or audit priority groups. Revalidate the finding, understand its root cause in context, make the smallest semantically correct change, preserve behavior, run appropriate tests and checks, rerun Sonar, and reject score-gaming fixes.
-compatibility: Requires a repository previously or currently analyzable by the code-health audit skill. Designed for Claude Code and Codex-compatible Agent Skills.
+description: Burn debt-ledger groups, one or as a queue, with the project's own test gate after each. Revalidate the finding, dispatch a narrow subagent, run the narrow-to-broad check ladder and then the gate, reject score-gaming, commit one group at a time, and stop the cycle on a red gate. Supports --p0, --p1 and --resume.
+compatibility: Requires a repository previously audited by the code-health audit skill. Designed for Claude Code and Codex-compatible Agent Skills.
 ---
 
-# Fix Selected Sonar Findings Safely
+# Fix Debt-Ledger Groups
 
-Use this skill only for findings or a priority group the user has explicitly chosen to fix, and start the implementation in a fresh session. If this same session already performed the audit, do not edit code: output the exact `/code-health:fix ...` handoff for a new session and stop.
+```
+/code-health:fix A3              one group
+/code-health:fix A3 A5 A1        a queue in the given order
+/code-health:fix --p0            every P0 in the ledger   (--p1 likewise)
+/code-health:fix --resume        continue an interrupted queue
+```
 
-If the command does not identify a finding/group and the current conversation does not contain an explicit user selection, ask the user to choose one; do not choose a large cleanup scope on their behalf.
+`fix` reads the debt ledger that `audit` wrote (`<plugin-root>/references/ledger.md`), re-measures
+each selected group before touching it, dispatches a narrow subagent per group, and runs the
+repository's own gate after every group so a red gate stops the cycle before it compounds. This is
+the only skill in this plugin that writes code and commits.
 
-## Non-negotiable rules
+## Hard rules
 
-- Optimize for real code quality and preserved behavior, not a green Sonar score.
-- Never use `NOSONAR`, ignore annotations/comments, exclusions, disabled rules, weaker quality profiles, higher thresholds, or test deletions as a shortcut. Treat suppression as a separate decision allowed only for a demonstrated false positive and explicit user approval.
+- Optimize for real code quality and preserved behavior, not a green score.
+- Never use `NOSONAR`, ignore annotations/comments, exclusions, disabled rules, weaker quality
+  profiles, raised thresholds, or test deletion as a shortcut. The one narrow exception (a
+  demonstrated false positive with explicit per-occurrence user approval) is a stop-and-ask, never a
+  subagent's own call — see the anti-gaming check (step 4).
 - Do not refactor unrelated code merely because it is nearby.
 - Do not reset, overwrite, stash, or discard pre-existing user changes.
-- Do not commit or push unless the user separately asks.
-- Prefer the simplest design that resolves the root cause. Do not turn one understandable function into unnecessary layers/helpers just to lower a metric.
-- Preserve public behavior and contracts unless the selected issue inherently requires a behavior change and the intended behavior is clear.
+- Do not push.
+- Prefer the simplest design that resolves the root cause. Do not turn one understandable piece of
+  code into unnecessary layers/helpers just to lower a metric.
+- Preserve public behavior and contracts unless the selected finding inherently requires a behavior
+  change and the intended behavior is clear.
+- Work happens in the **main working tree, no worktree** — the gate needs the repository's installed
+  dependencies, which an isolated worktree would not have.
+- `fix` never turns into `audit`, and `audit` never turns into `fix`. The ledger is a locator, not a
+  source of truth (`<plugin-root>/references/ledger.md`): when the stored analysis does not match
+  the current source, `fix` runs its own read-only measurement inside the fix session rather than
+  invoking the audit skill.
 
-## 1. Resolve and revalidate the selection
+## One deliberate reversal of v0.2.0
 
-1. Resolve the current repository root and derive the same stable Sonar project key used by the audit.
-2. If the selection is a short audit ID such as `A1`, load the latest local handoff from `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/` for this project. Require the stored repository path/project key to match the current repository. Resolve `A1` to its stored issue/rule keys.
-3. Treat handoff state only as a locator. Fetch current issue details and surrounding Sonar evidence before editing.
-4. Record current branch, `HEAD`, working-tree state, and pre-existing changes.
-5. If the stored/latest Sonar analysis does not correspond to the current source state, perform a fresh **read-only Sonar analysis inside this fix session before editing**. Do not invoke the audit skill and then continue from it; audit mode is intentionally terminal/read-only.
-6. Read the affected code in context: callers, callees, tests, types/contracts, adjacent abstractions, and relevant project conventions.
-7. Decide whether the selected finding reflects:
-   - a real defect/risk;
-   - a maintainability problem with a clear root cause;
-   - a symptom of a broader local design problem;
-   - a likely false positive.
-8. If resolving it correctly requires a consequential product/architecture decision with multiple reasonable outcomes, present the smallest decision to the user instead of guessing. Otherwise proceed.
+v0.2.0 said "do not commit or push unless the user separately asks." **Queue mode commits, one
+commit per group.** Without a commit there is no unit for the ratchet, no `--resume`, and no way to
+leave the machine unattended for an hour — the reversal is deliberate, not a relaxation of caution.
 
-If a short audit ID cannot be resolved because local state is missing or belongs to another repository, do not guess. Ask for a direct Sonar issue key/group description or have the user run a fresh audit.
+Two v0.2.0 rules are **not** touched by this reversal and stay exactly as strict:
 
-## 2. Establish a safety baseline
+- *Do not reset, overwrite, stash, or discard pre-existing user changes.*
+- *Do not push.*
 
-Before editing, establish the current behavior with repository-native checks.
+The commit stages **only the exact paths the subagent touched** for this group — never `git add -A`,
+never `git commit -a`. Any of those paths that was already dirty at cycle start makes the item abort
+instead of committing: the plugin has no way to separate its own edit from the user's inside one
+already-modified file, so it does not try.
 
-- Run the narrowest existing tests that exercise the affected area.
-- If the finding represents incorrect/reliability-sensitive behavior and the project has a suitable test harness, prefer a focused regression test that reproduces the problem before the implementation change. Confirm it fails for the expected reason, then keep it as protection after the fix.
-- For a behavior-preserving maintainability refactor, do not invent a fake failing test. Use existing behavioral tests; add a focused characterization/regression test only when the affected behavior is important and insufficiently protected.
-- Run typecheck/build before editing when interfaces, compilation boundaries, generated contracts, or build integration are relevant.
-- Record pre-existing failures and do not attribute them to the fix later.
+## 1. Resolve the invocation and the queue
 
-Do not introduce a new testing framework merely for this fix. If adequate automated tests are unavailable, inspect callers/contracts more carefully and state the reduced validation confidence in the final result.
+1. Parse the command into a selection: a single label, an ordered list of labels, `--p0`/`--p1`
+   (every group at that priority in the ledger, in ledger order), or `--resume` (continue a queue
+   already in progress).
+2. Resolve the repository root and derive the same project key `audit` uses; load the ledger from
+   `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json` and require its
+   `repo_path` to match the current repository. A mismatch or a missing ledger stops here — ask the
+   user to run `/code-health:audit` first rather than guessing at findings.
+3. **Resolve every label to its `gid` against the current ledger's `groups`, before anything else.**
+   Labels (`A1…An`) are a fresh, priority-ordered display convenience reassigned by every audit run;
+   only `gid` is stable across audits. See "Group identity" in
+   `<plugin-root>/references/ledger.md` — do not restate that schema here, follow it.
+4. With no argument and no explicit selection already present in the conversation, **ask** which
+   group(s) to fix. Never pick a large cleanup scope on the user's behalf.
+5. If a label cannot be resolved — the ledger is missing, belongs to another repository, or the
+   group no longer exists in `groups` — do not guess. Report which label failed and ask the user to
+   re-audit or choose a different one.
+6. Build `queue.items` in the resolved order, each starting `{gid, state: "pending"}`; for
+   `--resume`, load the existing `queue.items` instead of building a new one. Persist the ledger
+   immediately so a crash right after this point is itself resumable.
+7. **`--resume` and a `running` item:** an item found in state `running` belonged to a session that
+   crashed or was killed mid-item — a normal finish always leaves `done`, `failed`, or `skipped`.
+   Report it, check its recorded files for uncommitted changes left behind by the crashed attempt,
+   and let the user choose retry or skip. Never silently retry or silently skip it.
 
-## 3. Design the fix, then edit
+## 2. Cycle start, once
 
-Choose the remediation based on code semantics, not the rule text alone.
+Run this once per invocation, before the first item, whether the queue has one group or many.
 
-For complexity findings:
-- first look for a simpler control flow, early returns, clearer data transformations, removal of unnecessary state, or separation of genuinely independent responsibilities;
-- extract helpers only when they create meaningful names/cohesive units or reuse, not merely to move complexity elsewhere;
-- avoid abstraction layers that increase navigation cost without reducing conceptual complexity.
+1. **Detect the gate** and confirm it once with the user, then store it in `queue.gate`. Try in
+   order; first match wins:
+   0. `config.gate` in `.code-health/config.json`, if set — the repository's own committed answer,
+      used without asking.
+   1. `make gate` — a `gate` Makefile target exists.
+   2. `make test` — a `test` Makefile target exists.
+   3. `npm test` — `package.json` has a `scripts.test` that is not the npm placeholder stub.
+   4. `pytest` — pytest is configured (`pytest.ini`, `[tool.pytest]`, `tox.ini`, or a `tests/`
+      directory with pytest available).
+   5. `pre-commit run --all-files` — `.pre-commit-config.yaml` exists.
+   6. Otherwise ask the user directly what command proves the repository still works.
+   A gate already stored from an earlier cycle is reused by `--resume` without re-asking.
+2. Record the current branch, `HEAD`, and the exact set of paths already dirty in the working tree.
+   These recorded paths are what makes the per-item commit rule enforceable later: a path this
+   record already lists as dirty may never be claimed by a group's commit.
+3. **Run the gate once, before any edit**, and record any pre-existing failures. If the gate is
+   already red, **stop the whole cycle here** — a ratchet measured against a red baseline proves
+   nothing, and no amount of per-item care recovers that.
+4. **Snapshot `measure.py`'s repo-wide `summary`** into `queue.baseline_summary`. This is the
+   baseline the anti-gaming check (step 4) compares against; without it, "the code moved somewhere
+   the per-file re-measure no longer looks" is undetectable from a per-group diff alone.
 
-For duplication:
-- confirm the duplicated blocks represent the same concept and are expected to evolve together before extracting shared code;
-- tolerate intentional duplication when the concepts are independent and premature unification would couple them incorrectly.
+## 3. Per queue item
 
-For reliability/security findings:
-- trace inputs, outputs, error paths, state transitions, and callers;
-- fix the root cause at the correct boundary rather than adding a downstream guard that hides it.
+Repeat for each item in queue order until the queue is exhausted or the cycle stops.
 
-For maintainability smells:
-- preserve local conventions unless those conventions are the problem;
-- prefer reducing concepts and responsibilities over mechanically splitting files/functions.
+1. **Re-measure this dimension only**: `measure.py --layers <this group's layers> --files <this
+   group's files>`, with files resolved transitively as in the measurement layers
+   (`<plugin-root>/references/metrics.md`). Confirm the finding is still alive by matching this
+   group's `finding_ids`. If it is gone, mark the item `skipped` with the reason recorded and move to
+   the next item — do not treat a stale ledger entry as still actionable.
+2. **Establish the narrow safety baseline before editing**, the same ladder a single-group fix
+   always used: run the narrowest existing tests covering the affected area; for a
+   correctness/reliability finding, write a focused regression test that fails for the expected
+   reason before the change and is kept as protection after it; for a behavior-preserving refactor,
+   use the existing behavioral tests and add a characterization test only where the behavior is
+   important and currently unprotected. Never invent a fake failing test. Never introduce a new test
+   framework for this.
+3. **Dispatch a subagent** with a narrow brief: this group, these files, this shape of change, touch
+   nothing else. The subagent inherits every rule in Hard rules above and the anti-gaming check in
+   step 4 below.
+   **Escalation, restored from v0.2.0:** if resolving the finding correctly requires a consequential
+   product or architecture decision with several reasonable outcomes, stop this item here and put
+   the smallest such decision to the user instead of guessing. This matters most in queue mode,
+   where a group can be as broad as "cache protocol copied into 16 files" and several designs are
+   equally plausible.
+4. **Escalate checks narrow → broad**: the focused/regression tests from the safety baseline above,
+   then the affected module's/package's suite, then typecheck/build/lint, then the project gate
+   detected in step 2. Attribute any failure already recorded as pre-existing in step 2 to the
+   baseline, never to this fix.
+5. **Re-measure this group's dimension again and run the anti-gaming check** (step 4 below),
+   including comparing the repo-wide `summary` against `queue.baseline_summary` from step 2.
+6. **Commit on a pass.** Stage only the exact paths the subagent touched for this group — never
+   `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). If any of
+   those paths was already dirty at cycle start, abort this item instead of committing: mark it
+   `failed`, leave the edits uncommitted, and continue to the next item rather than the whole cycle.
+   On success, mark the item `done` with the commit SHA.
+7. **A red gate stops the whole cycle.** This group's edits stay uncommitted; nothing already
+   committed by an earlier item in this cycle is reverted. The human decides what happens next.
 
-Make one coherent change group at a time.
+## 4. Anti-gaming check
 
-## 4. Validate behavior and quality
+Run against each group's diff, before its commit in step 3. Any hit ⇒ reject: edits stay
+uncommitted, the item is marked `failed`, and the cycle stops (step 3).
 
-After each coherent group, escalate checks from narrow to broad according to risk and cost:
+1. Test files deleted; test functions removed; `skip` / `xfail` / `.skip` / `.only` /
+   `pytest.mark.skip` added; assertions weakened to tautologies.
+2. Any of `.code-health/config.json`, `.code-health/baseline.json`, `.code-health/guard.py`,
+   `.pre-commit-config.yaml`, `sonar-project.properties`, or a lint configuration modified. The
+   ratchet's own machinery is included deliberately — otherwise a subagent could neuter the hook and
+   still get its commit through. Moving the ratchet is `guard update-baseline`, a separate, explicit
+   command outside this cycle.
+3. Suppressions added: `NOSONAR`, `# noqa`, `# type: ignore`, `eslint-disable`,
+   `@SuppressWarnings`, `# pylint: disable`, `pragma: no cover`.
+4. Source files deleted, or moved into an excluded/generated path, without an equivalent
+   replacement.
+5. The repo-wide `summary` (step 2's `queue.baseline_summary`) did not improve consistently with the
+   local metric this group targeted — a sign the problem moved somewhere the measurer no longer
+   looks, rather than actually shrinking.
 
-1. Run the focused/regression tests for the affected behavior.
-2. Run the affected package/module/suite tests when available.
-3. Run relevant typecheck, build, lint, static checks, or other repository-native checks.
-4. For a high-risk or cross-cutting change, run the broader/full relevant test suite when reasonably bounded; do not claim full regression safety if it was not run.
-5. Inspect the diff for accidental churn, changed contracts, duplicated work, dead code, and unnecessary abstractions.
-6. Rerun Sonar against the resulting working tree.
-7. Confirm:
-   - the selected issue(s) are actually resolved or correctly reclassified;
-   - no new higher-impact Sonar findings appeared;
-   - relevant complexity/duplication/maintainability metrics did not regress elsewhere merely by moving the problem;
-   - unrelated pre-existing failures remain clearly separated.
+**The false-positive exception, restored from v0.2.0.** Rule 3 is not absolute. A suppression is
+permitted when the finding is demonstrably a false positive *and* the user explicitly approves it
+for that specific occurrence. That approval is always a stop-and-ask put to the user — never a
+subagent's own decision — and the suppression itself carries a comment naming the evidence for why
+it is a false positive. Without this path, a fix that legitimately needs one `# type: ignore` could
+never be committed at all.
 
-If the Sonar issue disappears but the implementation is less understandable or riskier, reject that implementation and choose a better one.
+## 5. Final announcement
 
-## 5. Stop at the right boundary
+Always finish with a compact, structured announcement in the user's language, understandable
+without reading the implementation log. Do not use a table.
 
-Do not continue into adjacent cleanup automatically. If the selected issue exposes another independent problem, mention it as a follow-up rather than expanding scope.
+In queue mode, each finished group gets one short status line as it completes. The full
+four-section announcement below is emitted once, either at the end of a cycle that ran to
+completion, or immediately when the cycle stops (a red gate, an escalation, or an unresolved anti-
+gaming hit).
 
-For a broad priority group, process issues sharing one root cause together; otherwise keep changes small enough to reason about and validate safely.
+Use exactly these section names when applicable:
 
-## Final human announcement
+**Исправлено** — one or two sentences per group naming the problem and the real root cause removed.
 
-Always finish with a compact, structured announcement in the user's language. It must be understandable without reading the implementation log. Do not use a table.
+**Как исправлено** — 2–5 short bullets per group describing the design/implementation approach in
+plain language. Explain the method, not a file-by-file changelog.
 
-Use exactly these sections when applicable:
+**Как проверено** — short bullets naming the checks that actually ran: the narrow safety baseline,
+the escalation ladder up to the gate, the anti-gaming check, and the gate's own before/after result
+for each group. State explicitly whether the group's finding disappeared and whether the gate ended
+green or red.
 
-**Исправлено** — one or two sentences naming the selected problem and the real root cause that was removed.
+**Осталось** — material residual risk, validation gaps, pre-existing failures, groups still
+`pending` in the queue, and any item stopped for escalation or a red gate. Omit this section only
+when there is nothing meaningful to report.
 
-**Как исправлено** — 2–5 short bullets describing the design/implementation approach in plain language. Explain the method, not a file-by-file changelog.
+Keep the announcement concise. Do not paste raw scanner output, long lists of touched files, or
+generic claims such as "everything is fine." Say only what was actually verified.
 
-**Как проверено** — short bullets naming the checks that actually ran: regression/targeted tests, broader tests when run, typecheck/build/lint or other repository-native checks, diff review, and Sonar before → after. Explicitly state whether the selected issue disappeared and whether new higher-impact findings appeared.
-
-**Осталось** — only material residual risk, validation gaps, pre-existing failures, or intentionally deferred related problems. Omit this section when there is nothing meaningful to report.
-
-Keep the announcement concise. Do not paste raw scanner output, long lists of files, or generic claims such as “everything is fine.” Say only what was actually verified.
-
-If the finding should not be fixed because it is a false positive or because the proposed remediation would make the design worse, use the same compact format but state that no code change was made and explain the evidence. Do not manipulate Sonar configuration automatically.
+If a group should not be fixed because it is a false positive, or because every remediation would
+make the design worse, use the same compact format and state that no code change was made for that
+group, with the evidence. Do not manipulate Sonar or ratchet configuration automatically to reach
+that conclusion.
