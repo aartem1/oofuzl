@@ -621,9 +621,17 @@ rather than commit, because the plugin cannot separate its work from the user's 
 
 ### Per queue item
 
+0. **Skip the item if it collides with the user's own work.** Compare the group's file list
+   against the dirty paths recorded at cycle start. Any overlap ⇒ mark the item `skipped` with the
+   reason and move on **without dispatching anything**. This check belongs here, before the edit,
+   not at commit time: once a subagent has written into a file that already held uncommitted user
+   content, the two are entangled in the working tree, and "leave it uncommitted" does not
+   disentangle them. The commit-time check in step 6 stays as a backstop for paths the group did
+   not list.
 1. **Re-measure this dimension only**: `measure.py --layers <the group's layers> --files <the
-   group's files>`, resolved transitively per §5. Confirm the finding is still alive by
-   `finding_ids`. Gone ⇒ `skipped`, reason recorded, continue.
+   group's files>`. **`--layers` is resolved transitively; `--files` is not** — it is an exact
+   membership filter, so the file list must already name everything the group covers. Confirm the
+   finding is still alive by `finding_ids`. Gone ⇒ `skipped`, reason recorded, continue.
 2. **Establish the narrow safety baseline** — the v0.2.0 ladder, which the gate does not replace:
    run the narrowest existing tests covering the affected area; for a reliability/correctness
    finding write a focused regression test that fails for the expected reason *before* the fix and
@@ -633,9 +641,12 @@ rather than commit, because the plugin cannot separate its work from the user's 
 3. **Dispatch a subagent** with a narrow brief: this group, these files, this shape of change,
    touch nothing else. The subagent inherits every non-negotiable rule below.
    **Escalation path, restored from v0.2.0:** if correcting the finding needs a consequential
-   product or architecture decision with several reasonable outcomes, the item stops and the
-   smallest such decision is put to the user. The cycle does not guess. This matters most in queue
-   mode, where a group can be "cache protocol copied into 16 files".
+   product or architecture decision with several reasonable outcomes, the subagent stops and
+   **returns the decision to the cycle rather than asking the user itself** — it holds a narrow
+   brief and, in an unattended run, has no one to ask. The cycle marks the item `skipped`, records
+   the question, and puts the smallest version of it to the user when the run ends or immediately
+   if the user is present. The cycle does not guess. This matters most in queue mode, where a group
+   can be "cache protocol copied into 16 files".
 4. **Escalate checks narrow → broad**: focused/regression tests, then the affected module's suite,
    then typecheck/build/lint, then **the project gate**. Pre-existing failures stay attributed to
    the baseline, never to the fix.
