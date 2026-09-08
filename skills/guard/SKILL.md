@@ -113,15 +113,27 @@ With confirmation, in this exact order:
    self-contained (standard library plus the `lizard` binary pre-commit provides) so a colleague
    without this plugin and a CI runner both pass the same hook. If a copy already exists and differs
    from the plugin's, report the drift before overwriting it.
-4. **Write `.code-health/baseline.json` by shelling out to the vendored copy just written**, not the
-   plugin's own `scripts/guard.py`:
+4. **Check the lizard version, then write `.code-health/baseline.json` by shelling out to the
+   vendored copy just written**, not the plugin's own `scripts/guard.py`:
 
    ```bash
+   lizard --version                                                   # must print 1.23.0
    python .code-health/guard.py --baseline .code-health/baseline.json --repo .
    ```
 
-   This is what "one measurement path" (below) means in practice: the same script and the same
-   pinned lizard version write the baseline and later enforce it.
+   **Run the version check first and stop if it disagrees** with the version pinned in
+   `additional_dependencies` above. `guard.py --baseline` uses whatever lizard is on the current
+   `PATH`, while the hook will use the pinned one pre-commit installs — so skipping this check
+   writes the baseline with one lizard and enforces it with another, which is precisely what "One
+   measurement path, one lizard version" (below) exists to prevent, and it produces false failures
+   on untouched code the first time a CCN or nesting calculation shifts upstream. On a mismatch,
+   install the pinned version first (`uv tool install "lizard==1.23.0"` → `pipx install
+   "lizard==1.23.0"` → the plugin-owned venv, the same order as
+   `<plugin-root>/references/tools.md`), or point `CODE_HEALTH_LIZARD` at a binary of that version
+   for this one command. Do not proceed with a different version.
+
+   This is what "one measurement path" means in practice: the same script and the same pinned
+   lizard version write the baseline and later enforce it.
 5. **Stage all three files** (`.pre-commit-config.yaml`, `.code-health/guard.py`,
    `.code-health/baseline.json`) and state plainly that the baseline must be committed. An
    uncommitted baseline makes the ratchet meaningless for the second person who clones the repository

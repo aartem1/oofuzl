@@ -41,6 +41,26 @@ class GracefulAbsenceTests(unittest.TestCase):
                           {"vulture": self.ABSENT, "knip": self.ABSENT})
         self.assertEqual(out["status"], "not_measured")
 
+    def test_madge_is_given_the_file_list_not_the_repository_root(self):
+        """`relpaths` was read for the emptiness check and then ignored, so
+        `measure.py --files a.js` still walked the whole repository."""
+        seen = []
+
+        def fake_run(argv, timeout=None, cwd=None):
+            seen.append(argv)
+            return type("P", (), {"returncode": 0, "stdout": "{}"})()
+
+        original = EX._run
+        EX._run = fake_run
+        try:
+            EX.run_madge(self.root, ["a.js", "b.ts", "c.py"],
+                         {"available": True, "reason": None})
+        finally:
+            EX._run = original
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][-2:], ["a.js", "b.ts"])
+        self.assertNotIn(str(self.root), seen[0])
+
     def test_survey_never_raises_and_covers_every_requested_tool(self):
         block = EX.survey(["lizard", "jscpd", "madge", "vulture", "knip"],
                           install_missing=False)

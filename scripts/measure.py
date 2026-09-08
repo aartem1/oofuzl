@@ -66,8 +66,7 @@ def build_document(args):
     layers = {name: F.empty_layer("layer not requested") for name in F.LAYER_NAMES}
     all_findings = []
 
-    tool_names = ["lizard", "jscpd", "madge", "vulture", "knip"]
-    tools = EX.survey(tool_names, install_missing=args.install_missing)
+    tools = EX.survey(F.tools_for(wanted), install_missing=args.install_missing)
 
     if "size" in wanted:
         layers["size"] = S.measure_sizes(repo_root, inventory, cfg)

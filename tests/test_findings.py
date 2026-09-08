@@ -29,6 +29,17 @@ class LayerResolutionTests(unittest.TestCase):
             for dep in F.LAYER_DEPS.get(name, ()):
                 self.assertIn(dep, F.LAYER_NAMES, "%s -> %s" % (name, dep))
 
+    def test_only_the_tools_the_resolved_layers_can_use_are_surveyed(self):
+        """`survey` probed all five tools regardless of `--layers`:
+        `--layers size --files <one file>` took 3.6 s, ~3.4 s of it
+        `npx --no-install` startup for tools that layer cannot consume, and
+        `fix` runs a narrow measure twice per queue item."""
+        self.assertEqual(F.tools_for(F.resolve_layers(["size"])), ["lizard"])
+        self.assertEqual(F.tools_for(F.resolve_layers(["churn"])), [])
+        self.assertEqual(F.tools_for(F.resolve_layers(["dup"])), ["jscpd", "lizard"])
+        self.assertEqual(F.tools_for(F.resolve_layers(F.LAYER_NAMES)),
+                         ["jscpd", "lizard", "madge", "vulture"])
+
     def test_dup_pulls_in_size(self):
         self.assertEqual(F.resolve_layers(["dup"]), {"dup", "size"})
 

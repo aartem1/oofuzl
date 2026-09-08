@@ -20,6 +20,7 @@ stashes unstaged changes, so reading from disk reads the staged content.
 import argparse
 import ast
 import csv
+import datetime
 import io
 import json
 import math
@@ -572,6 +573,7 @@ def write_baseline(repo_root, target, settings):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({
         "schema": 1,
+        "generated_at": _now(),
         "head": _head(repo_root),
         "thresholds": thresholds,
         "files": files,
@@ -628,6 +630,14 @@ def main(argv=None):
         report_drift(drift)
     report(violations)
     return 1
+
+
+def _now():
+    """UTC, second resolution, `Z` suffix -- the same shape measure.py's
+    `generated_at` uses. DESIGN 10's baseline schema shows the field; it
+    was the one key in that schema the writer never produced."""
+    return (datetime.datetime.now(datetime.timezone.utc)
+            .replace(microsecond=0).isoformat().replace("+00:00", "Z"))
 
 
 def _head(repo_root):

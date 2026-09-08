@@ -26,7 +26,9 @@ import sys
 from . import config as _config
 from . import pyast as _pyast
 
-LIZARD_VERSION = "1.23.0"
+# The pinned lizard version lives in `externals.LIZARD_VERSION` alone --
+# it is what provisioning and the pre-commit `additional_dependencies`
+# entry both read. A second copy here was unused and free to drift.
 LIZARD_ENV_OVERRIDE = "CODE_HEALTH_LIZARD"
 
 FUNC_FIELDS = (

@@ -19,6 +19,10 @@ from pathlib import Path
 
 LIZARD_VERSION = "1.23.0"
 
+# Chunked so a large repository does not exceed the OS argv limit; same
+# size and same reason as sizes.py.
+_ARG_CHUNK = 400
+
 _VENV = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) \
     / "code-health" / "venv"
 
@@ -155,16 +159,29 @@ def run_madge(repo_root, relpaths, tool_state):
                 "graph": {}, "cycles": []}
     # `--circular` REPLACES the dependency map in the output, so it cannot give
     # both. Ask for the map and derive the cycles from it.
-    proc = _run(["npx", "-y", TOOLS["madge"]["package"], "--json", str(repo_root)],
-                timeout=600)
-    if proc is None or proc.returncode != 0:
-        return {"status": "not_measured", "reason": "madge failed",
-                "graph": {}, "cycles": []}
-    try:
-        graph = json.loads(proc.stdout)
-    except ValueError as exc:
-        return {"status": "not_measured", "reason": "madge output unreadable: %s" % exc,
-                "graph": {}, "cycles": []}
+    #
+    # madge is given the JS/TS FILE LIST, not the repository root: `relpaths`
+    # used to be read for the emptiness check above and then ignored, so
+    # `measure.py --files a.js` still walked the whole repository and the
+    # restriction the caller asked for silently did not apply. Chunked for
+    # the same argv reason as sizes.py; madge follows each entry point's
+    # requires, so the union of the chunk graphs is the same graph.
+    graph = {}
+    for start in range(0, len(js), _ARG_CHUNK):
+        proc = _run(["npx", "-y", TOOLS["madge"]["package"], "--json"]
+                    + js[start:start + _ARG_CHUNK], timeout=600, cwd=str(repo_root))
+        if proc is None or proc.returncode != 0:
+            return {"status": "not_measured", "reason": "madge failed",
+                    "graph": {}, "cycles": []}
+        try:
+            chunk = json.loads(proc.stdout)
+        except ValueError as exc:
+            return {"status": "not_measured",
+                    "reason": "madge output unreadable: %s" % exc,
+                    "graph": {}, "cycles": []}
+        for module, targets in chunk.items():
+            graph.setdefault(module, [])
+            graph[module] = sorted(set(graph[module]) | set(targets))
     from . import pyast
     return {"status": "measured", "graph": graph,
             "cycles": pyast.find_cycles({k: list(v) for k, v in graph.items()})}

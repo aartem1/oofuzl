@@ -17,6 +17,27 @@ LAYER_NAMES = ("size", "dup", "imports", "dead", "churn", "derived")
 # gone. Every `symbol_collision` group was therefore skipped unconditionally.
 LAYER_DEPS = {"dup": ("size",), "derived": ("size", "churn", "imports")}
 
+# The external tools each layer can actually use. `survey` probes only the
+# union over the RESOLVED layers: probing all five costs ~3.4 s of
+# `npx --no-install` startup for tools the requested layer cannot consume,
+# and `fix` runs a narrow `measure.py` twice per queue item. `churn` uses
+# plain git and `derived` only reads other layers, so both need nothing;
+# `dead` needs vulture alone, because knip's output is not parsed (see
+# externals.run_dead).
+LAYER_TOOLS = {
+    "size": ("lizard",),
+    "dup": ("jscpd",),
+    "imports": ("madge",),
+    "dead": ("vulture",),
+    "churn": (),
+    "derived": (),
+}
+
+
+def tools_for(layers):
+    """Every tool the given (already resolved) layers can use, sorted."""
+    return sorted({tool for layer in layers for tool in LAYER_TOOLS.get(layer, ())})
+
 # (finding kind, threshold key, row key)
 _FILE_RULES = (
     ("file_too_long", "file_lines", "lines"),
