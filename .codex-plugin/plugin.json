@@ -1,0 +1,24 @@
+{
+  "name": "code-health",
+  "version": "0.3.0",
+  "description": "Measure, fix, and ratchet repository code health for AI-agent work: local metrics, optional SonarQube, a debt ledger, and a pre-commit guard",
+  "author": {
+    "name": "Artem"
+  },
+  "repository": "https://github.com/aartem1/personal_ai_tools",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Code Health",
+    "shortDescription": "Аудит, исправление и храповик технического долга.",
+    "longDescription": "Меряет размер файлов и функций, сложность, число параметров, вложенность, токен-цену, дубликаты, циклы импортов, мёртвый код и частоту изменений. SonarQube — необязательный слой: без него аудит честно помечает слой «не измерен» и продолжает. Ведёт книгу долга, исправляет группы по очереди с прогоном тестов проекта после каждой, и ставит pre-commit хук, который не даёт коммиту ухудшить метрики.",
+    "developerName": "Artem",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Проведи аудит качества текущего репозитория и покажи компактный приоритизированный отчёт."
+    ]
+  }
+}
