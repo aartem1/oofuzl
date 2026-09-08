@@ -720,6 +720,11 @@ With confirmation, in this order:
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
    ```
 
+   That block is an **entry** under a top-level `repos:` list, not a whole file. Append it to an
+   existing `.pre-commit-config.yaml`; in a repository that has none, create one whose entire
+   content is `repos:` followed by the same block. A model installing into a fresh repository has
+   no other way to know this from the snippet alone.
+
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are omitted. `types_or`
    is what earns its place: it makes pre-commit skip the hook entirely when a commit touches only
    docs or config, instead of paying process startup for `guard.py` to filter them.

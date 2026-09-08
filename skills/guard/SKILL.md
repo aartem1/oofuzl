@@ -76,6 +76,23 @@ With confirmation, in this exact order:
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
    ```
 
+
+   The block above is an **entry**, indented to sit under a top-level `repos:` list. Append it to an
+   existing `.pre-commit-config.yaml`'s `repos:`. If the repository has no such file yet, create one
+   whose entire content is:
+
+   ```yaml
+   repos:
+     - repo: local
+       hooks:
+         - id: code-health-guard
+           name: code-health guard (ratchet)
+           entry: python .code-health/guard.py
+           language: python
+           additional_dependencies: ["lizard==1.23.0"]
+           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
+   ```
+
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are deliberately omitted.
    `types_or` earns its place: it is what makes pre-commit skip the hook entirely when a commit
    touches only docs or config, instead of paying process startup for `guard.py` to filter them out
