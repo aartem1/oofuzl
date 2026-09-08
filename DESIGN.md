@@ -763,7 +763,8 @@ With confirmation, in this order:
            entry: python .code-health/guard.py
            language: python
            additional_dependencies: ["lizard==1.23.0"]
-           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
+           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
+                      swift, scala, lua, objective-c]
    ```
 
    That block is an **entry** under a top-level `repos:` list, not a whole file. Append it to an
@@ -774,6 +775,11 @@ With confirmation, in this order:
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are omitted. `types_or`
    is what earns its place: it makes pre-commit skip the hook entirely when a commit touches only
    docs or config, instead of paying process startup for `guard.py` to filter them.
+
+   **The tag list must cover `SUPPORTED_EXT`.** A file whose type is not listed never reaches the
+   hook at all, so an extension the hook claims to check and pre-commit never delivers is checked
+   by nobody. `lua` and `objective-c` were missing (`.lua`, `.m`), and both are real `identify`
+   tags — verified against `identify.ALL_TAGS`. `.mm` arrives as `c++`, which is already listed.
 
    pre-commit builds the isolated environment itself, so the user's machine stays clean and CI
    behaves identically. Verified: `language: python` + `additional_dependencies` puts lizard's

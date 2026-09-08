@@ -80,7 +80,8 @@ With confirmation, in this exact order:
            entry: python .code-health/guard.py
            language: python
            additional_dependencies: ["lizard==1.23.0"]
-           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
+           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
+                      swift, scala, lua, objective-c]
    ```
 
 
@@ -97,13 +98,15 @@ With confirmation, in this exact order:
            entry: python .code-health/guard.py
            language: python
            additional_dependencies: ["lizard==1.23.0"]
-           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#, swift, scala]
+           types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
+                      swift, scala, lua, objective-c]
    ```
 
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are deliberately omitted.
    `types_or` earns its place: it is what makes pre-commit skip the hook entirely when a commit
    touches only docs or config, instead of paying process startup for `guard.py` to filter them out
-   itself.
+   itself. Do not trim the tag list: a type that is missing from it never reaches the hook, so an
+   extension `guard.py` claims to check would end up checked by nobody.
 3. **Vendor `<plugin-root>/scripts/guard.py` to `.code-health/guard.py`.** This copy is
    self-contained (standard library plus the `lizard` binary pre-commit provides) so a colleague
    without this plugin and a CI runner both pass the same hook. If a copy already exists and differs

@@ -20,11 +20,11 @@ stashes unstaged changes, so reading from disk reads the staged content.
 import argparse
 import ast
 import csv
-import fnmatch
 import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -196,25 +196,62 @@ def load_json(path, default):
         return default
 
 
-def _excluded(relpath, patterns):
-    """Segment-level subset of discovery.compile_pattern, good enough for a hook.
+# Verbatim copy of code_health/discovery.py's gitwildmatch matcher, for the
+# same reason as the CSV parser and the nesting pass: this file never imports
+# code_health. The previous `fnmatch` shortcut disagreed with the measurer on
+# six of thirteen plausible patterns, in BOTH directions -- so a repository's
+# own `exclude` list meant one thing to the audit and another to the ratchet.
+# `references/tools.md` states that not using fnmatch here is a standing rule.
+# tests/test_parser_agreement.py pins the two copies to each other.
+def compile_pattern(pattern):
+    """Translate one gitwildmatch pattern into a regex over a POSIX relpath."""
+    anchored = pattern.startswith("/")
+    pat = (pattern[1:] if anchored else pattern).rstrip("/")
+    # A pattern with no slash matches its basename at any depth.
+    if "/" not in pat:
+        anchored = False
+        pat = "**/" + pat
 
-    `**/dist/**` -> skip any path with a `dist` segment. Patterns that are not
-    of that shape fall back to a whole-path fnmatch.
-    """
-    segments = set(Path(relpath).parts)
-    for pattern in patterns:
-        core = pattern.strip("/")
-        if core.startswith("**/"):
-            core = core[3:]
-        if core.endswith("/**"):
-            core = core[:-3]
-        if "/" not in core and "*" not in core:
-            if core in segments:
-                return True
-        elif fnmatch.fnmatch(relpath, pattern) or fnmatch.fnmatch(relpath, core):
-            return True
-    return False
+    parts = pat.split("/")
+    out = ["^"]
+    if not anchored and parts and parts[0] != "**":
+        out.append("(?:[^/]+/)*")
+
+    for index, segment in enumerate(parts):
+        last = index == len(parts) - 1
+        if segment == "**":
+            # `**/` is zero or more directories; a trailing `/**` is everything below.
+            out.append(".*" if last else "(?:[^/]+/)*")
+            continue
+        out.append(_segment_regex(segment))
+        if not last:
+            out.append("/")
+    # A matched directory takes everything below it with it: a bare `vendor`
+    # or `build/` copied out of .gitignore must exclude what is inside it.
+    out.append("(?:/.*)?$")
+    return re.compile("".join(out))
+
+
+def _segment_regex(segment):
+    buf = []
+    for ch in segment:
+        if ch == "*":
+            buf.append("[^/]*")
+        elif ch == "?":
+            buf.append("[^/]")
+        else:
+            buf.append(re.escape(ch))
+    return "".join(buf)
+
+
+def compile_excludes(patterns):
+    """Compile once per run, not once per path: the baseline pass walks every
+    tracked file in the repository."""
+    return [compile_pattern(p) for p in patterns]
+
+
+def excluded(relpath, compiled):
+    return any(rx.match(relpath) for rx in compiled)
 
 
 def settings_for(repo_root):
@@ -223,7 +260,20 @@ def settings_for(repo_root):
     for name, override in (cfg.get("thresholds") or {}).items():
         if name in merged:
             merged[name].update(override)
-    return merged, cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN), cfg.get("exclude", [])
+    return (merged,
+            _chars_per_token(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)),
+            compile_excludes(cfg.get("exclude", [])))
+
+
+def _chars_per_token(value):
+    """It is a divisor. `0` in a repository's config used to reach the token
+    estimate and abort the commit with a ZeroDivisionError traceback, where
+    the measurer's own `config.estimate_tokens` raises a clean error."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        raise SystemExit(
+            "code-health guard: chars_per_token must be a positive number, "
+            "got %r in %s" % (value, CONFIG_RELPATH))
+    return value
 
 
 def _read_files(repo_root, relpaths, chars_per_token):
@@ -244,10 +294,22 @@ def _read_files(repo_root, relpaths, chars_per_token):
     return files, python_nesting
 
 
+# Chunked so a large repository does not exceed the OS argv limit -- same
+# reason and same size as code_health/sizes.py. `--baseline` passes every
+# tracked source file in one call: measured, 17,118 paths raises an uncaught
+# `OSError: Argument list too long`, i.e. a traceback out of
+# `guard install` inside someone else's repository.
+_ARG_CHUNK = 400
+
+
 def _lizard_rows(repo_root, argv, relpaths):
-    proc = subprocess.run(argv + ["-ENS", "--csv"] + list(relpaths),
-                          cwd=str(repo_root), capture_output=True, text=True)
-    return parse_lizard_csv(proc.stdout)
+    rows = []
+    for start in range(0, len(relpaths), _ARG_CHUNK):
+        proc = subprocess.run(
+            argv + ["-ENS", "--csv"] + list(relpaths[start:start + _ARG_CHUNK]),
+            cwd=str(repo_root), capture_output=True, text=True)
+        rows.extend(parse_lizard_csv(proc.stdout))
+    return rows
 
 
 def _nesting_for(row, python_nesting):
@@ -316,13 +378,17 @@ def measure(repo_root, relpaths, chars_per_token):
     return files, True
 
 
-# (label, measured key, threshold key)
-_FILE_CHECKS = (("lines", "lines", "file_lines"),
-                ("tokens", "tokens", "file_tokens"))
-_FUNC_CHECKS = (("lines", "lines", "function_lines"),
-                ("ccn", "ccn", "function_ccn"),
-                ("params", "params", "parameters"),
-                ("nesting", "nesting", "nesting"))
+# (label, measured key, threshold key). The labels are spelled out because
+# this file is vendored into repositories whose owners have never heard of
+# this plugin or of lizard, and the failure report is its only user-facing
+# surface: `ccn` and `nesting` mean nothing to someone reading a rejected
+# commit for the first time.
+_FILE_CHECKS = (("file lines", "lines", "file_lines"),
+                ("estimated tokens", "tokens", "file_tokens"))
+_FUNC_CHECKS = (("function lines", "lines", "function_lines"),
+                ("cyclomatic complexity", "ccn", "function_ccn"),
+                ("parameters", "params", "parameters"),
+                ("nesting depth", "nesting", "nesting"))
 
 
 def ceiling(baseline_value, warn):
@@ -383,7 +449,9 @@ def report(violations):
         where = "%s::%s" % (v["path"], v["entity"]) if v["entity"] else v["path"]
         origin = ("baseline %s" % v["baseline"]) if v["baseline"] is not None \
             else ("new, threshold %s" % v["warn"])
-        print("  %-48s %-8s %s > %s (%s)"
+        # `>=`, not `>`: `exceeds` fires at value >= limit, so a real
+        # violation used to print as `lines 400 > 400`.
+        print("  %-44s %-22s %s >= %s (%s)"
               % (where, v["metric"], v["value"], v["limit"], origin))
     print("\nOld debt is grandfathered; this is new growth.")
     print("To move the ratchet deliberately:  /code-health:guard update-baseline")
@@ -419,7 +487,7 @@ def main(argv=None):
 
     targets = _changed(repo_root) if args.check else list(args.files)
     targets = [t for t in targets
-               if Path(t).suffix in SUPPORTED_EXT and not _excluded(t, exclude)]
+               if Path(t).suffix in SUPPORTED_EXT and not excluded(t, exclude)]
     if not targets:
         return 0
 
@@ -458,7 +526,7 @@ def _all_supported(repo_root, exclude):
         names = [str(p.relative_to(repo_root))
                  for p in Path(repo_root).rglob("*") if p.is_file()]
     return [n for n in names
-            if Path(n).suffix in SUPPORTED_EXT and not _excluded(n, exclude)]
+            if Path(n).suffix in SUPPORTED_EXT and not excluded(n, exclude)]
 
 
 def _changed(repo_root):

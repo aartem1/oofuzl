@@ -160,6 +160,18 @@ require at least one directory component to satisfy a leading `**/`. A config th
 with plain `fnmatch`, silently fails to exclude one sitting at the repository root — exactly the
 common case.
 
+**`guard.py` carries a verbatim copy of the same matcher**, for the same reason it carries its own
+CSV parser and its own nesting pass: it never imports `code_health`. It used `fnmatch` until it was
+measured against the real matcher over thirteen plausible patterns and disagreed on six of them, in
+both directions. `tests/test_parser_agreement.py` now runs both implementations over a
+pattern × path corpus so the copies cannot drift again.
+
+**A pattern that matches a directory excludes everything under it**, and a trailing slash means
+"directory". Both are gitignore rules, and both were missing: `vendor` and `build/` — the shapes a
+user copies straight out of `.gitignore` — matched the bare directory name only, which never equals
+a file path, so the audit excluded nothing and the ratchet (under `fnmatch`) excluded everything.
+The regex therefore ends with `(?:/.*)?$`, and a trailing slash is stripped before translation.
+
 ## `npx -y` and Python installs
 
 `npx -y <pkg>` downloads into the npx cache on first use and needs network access; offline, the

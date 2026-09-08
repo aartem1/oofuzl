@@ -43,11 +43,19 @@ SOURCE_EXT = frozenset({
 
 
 def compile_pattern(pattern):
-    """Translate one gitwildmatch pattern into a regex over a POSIX relpath."""
+    """Translate one gitwildmatch pattern into a regex over a POSIX relpath.
+
+    Two gitignore rules that a naive translation drops, and that matter
+    because users copy `exclude` entries straight out of `.gitignore`:
+    a trailing slash means "directory", and a pattern that matches a
+    DIRECTORY excludes everything under it. Without the `(?:/.*)?` tail,
+    `vendor` and `build/` matched nothing at all -- neither the directory
+    nor a single file inside it.
+    """
     anchored = pattern.startswith("/")
-    pat = pattern[1:] if anchored else pattern
+    pat = (pattern[1:] if anchored else pattern).rstrip("/")
     # A pattern with no slash matches its basename at any depth.
-    if "/" not in pat.rstrip("/"):
+    if "/" not in pat:
         anchored = False
         pat = "**/" + pat
 
@@ -65,7 +73,8 @@ def compile_pattern(pattern):
         out.append(_segment_regex(segment))
         if not last:
             out.append("/")
-    out.append("$")
+    # A matched directory takes everything below it with it.
+    out.append("(?:/.*)?$")
     return re.compile("".join(out))
 
 

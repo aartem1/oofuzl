@@ -77,6 +77,81 @@ class ParserAgreementTests(unittest.TestCase):
                 value)
 
 
+class ExcludePatternAgreementTests(unittest.TestCase):
+    """`guard.py` used to match excludes with `fnmatch`, which
+    `references/tools.md` states as a standing rule this plugin does not use.
+    It disagreed with `discovery.compile_pattern` on six of the thirteen
+    patterns below, in both directions -- so one `exclude` list meant one
+    thing to the audit and another to the ratchet, in the file most likely
+    to be copied out of someone's `.gitignore`."""
+
+    # Thirteen patterns a real `.code-health/config.json` plausibly holds.
+    PATTERNS = [
+        "**/node_modules/**",   # the plugin's own default
+        "**/dist/**",
+        "vendor",               # bare directory, straight out of .gitignore
+        "build/",               # trailing slash, likewise
+        "/dist/**",             # anchored at the repository root
+        "*.min.js",
+        "**/test_*.py",
+        "src/**/*.ts",
+        "docs",
+        "**/__pycache__/**",
+        "app/legacy/old.py",    # one exact path
+        "*.lock",
+        "**/.worktrees/**",
+    ]
+    PATHS = [
+        "node_modules/x/y.js", "app/node_modules/x/y.js",
+        "dist/a.js", "packages/web/dist/a.js", "distribution/a.js",
+        "vendor/big.py", "vendor", "app/vendor/lib/x.go",
+        "build/out/main.js", "build",
+        "app/bundle.min.js", "pkg/test_thing.py", "pkg/test_sub/thing.py",
+        "src/deep/nested/a.ts", "src/a.ts", "docs/guide/index.md",
+        "app/__pycache__/x.pyc", "app/legacy/old.py", "app/legacy/new.py",
+        "poetry.lock", ".worktrees/wt/app/main.py", "app/main.py",
+    ]
+
+    def test_both_matchers_agree_on_every_pattern_and_path(self):
+        from code_health import discovery as D
+        guard = load_guard()
+        for pattern in self.PATTERNS:
+            mine = D.compile_pattern(pattern)
+            theirs = guard.compile_excludes([pattern])
+            for path in self.PATHS:
+                self.assertEqual(
+                    bool(mine.match(path)), guard.excluded(path, theirs),
+                    "%s vs %s" % (pattern, path))
+
+    def test_a_bare_directory_pattern_excludes_what_is_inside_it(self):
+        """The case that made the two disagree in the first place. A user
+        copying `vendor` or `build/` out of `.gitignore` got nothing
+        excluded from the audit and everything from the ratchet: the
+        measurer's regex matched the directory name only, which never
+        equals a file path."""
+        from code_health import discovery as D
+        guard = load_guard()
+        for pattern, path in (("vendor", "vendor/big.py"),
+                              ("vendor", "app/vendor/lib/x.go"),
+                              ("build/", "build/out/main.js"),
+                              ("docs", "docs/guide/index.md")):
+            self.assertTrue(D.compile_pattern(pattern).match(path),
+                            "%s vs %s" % (pattern, path))
+            self.assertTrue(guard.excluded(path, guard.compile_excludes([pattern])),
+                            "%s vs %s" % (pattern, path))
+
+    def test_a_similar_prefix_is_still_not_a_match(self):
+        from code_health import discovery as D
+        guard = load_guard()
+        for pattern, path in (("**/dist/**", "distribution/a.js"),
+                              ("vendor", "vendors/big.py"),
+                              ("/dist/**", "web/dist/a.js")):
+            self.assertFalse(D.compile_pattern(pattern).match(path),
+                             "%s vs %s" % (pattern, path))
+            self.assertFalse(guard.excluded(path, guard.compile_excludes([pattern])),
+                             "%s vs %s" % (pattern, path))
+
+
 class NestingAgreementTests(unittest.TestCase):
     """guard.py duplicates the nesting-depth AST pass for the same reason it
     duplicates the CSV parser: it cannot import code_health. This is the

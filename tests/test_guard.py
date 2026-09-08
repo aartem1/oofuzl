@@ -106,6 +106,47 @@ class RatchetTests(unittest.TestCase):
         (self.root / "vendor" / "big.py").write_text("x = 1\n" * 900, encoding="utf-8")
         self.assertEqual(run_guard("vendor/big.py", cwd=self.root).returncode, 0)
 
+    def test_a_bare_directory_exclude_is_honoured(self):
+        # The `.gitignore`-copy shape: `vendor`, not `**/vendor/**`.
+        self.baseline({})
+        (self.root / ".code-health" / "config.json").write_text(
+            json.dumps({"exclude": ["vendor"]}))
+        (self.root / "vendor").mkdir()
+        (self.root / "vendor" / "big.py").write_text("x = 1\n" * 900, encoding="utf-8")
+        self.assertEqual(run_guard("vendor/big.py", cwd=self.root).returncode, 0)
+
+    def test_a_zero_chars_per_token_is_a_clean_error_not_a_traceback(self):
+        # It is a divisor; `0` used to abort the commit with a
+        # ZeroDivisionError traceback out of the token estimate.
+        self.baseline({})
+        (self.root / ".code-health" / "config.json").write_text(
+            json.dumps({"chars_per_token": 0}))
+        self.write("a.py", 10)
+        out = run_guard("a.py", cwd=self.root)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("chars_per_token", out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+
+    def test_the_failure_report_states_the_comparison_it_actually_makes(self):
+        # `exceeds` fires at value >= limit, so `400 > 400` was a lie in the
+        # one place a stranger to this plugin ever reads its output.
+        self.baseline({})
+        self.write("new.py", 400)
+        out = run_guard("new.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("400 >= 400", out.stdout)
+        self.assertIn("file lines", out.stdout)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_function_metrics_are_named_in_words(self):
+        self.baseline({})
+        (self.root / "a.py").write_text(
+            "def f(a, b, c, d, e, g):\n    return 1\n", encoding="utf-8")
+        out = run_guard("a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("parameters", out.stdout)
+        self.assertNotIn(" ccn ", out.stdout)
+
 
 class FunctionRatchetTests(RatchetTests):
     def test_existing_function_that_grows_fails(self):
