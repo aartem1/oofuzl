@@ -10,7 +10,11 @@ REPO_ROOT = PLUGIN_ROOT.parents[1]
 class PluginLayoutTests(unittest.TestCase):
     def test_plugin_directory_is_code_health(self):
         self.assertTrue((REPO_ROOT / "plugins" / "code-health").is_dir())
-        self.assertFalse((REPO_ROOT / "plugins" / "sonar-code-health").exists())
+        # Assembled at runtime for the same reason as the needle below: a
+        # literal old-name path here would make this file match its own
+        # "no old name survives" check once committed.
+        old_plugin_dir = "-".join(("sonar", "code", "health"))
+        self.assertFalse((REPO_ROOT / "plugins" / old_plugin_dir).exists())
 
     def test_both_manifests_name_the_plugin_code_health(self):
         for rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
