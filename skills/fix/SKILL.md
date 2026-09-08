@@ -79,7 +79,10 @@ already-modified file, so it does not try.
 7. **`--resume` and a `running` item:** an item found in state `running` belonged to a session that
    crashed or was killed mid-item — a normal finish always leaves `done`, `failed`, or `skipped`.
    Report it, check its recorded files for uncommitted changes left behind by the crashed attempt,
-   and let the user choose retry or skip. Never silently retry or silently skip it.
+   and let the user choose retry or skip. Never silently retry or silently skip it. See "Queue item
+   state and `running` recovery" in `<plugin-root>/references/ledger.md` for the authoritative
+   statement of this rule — this restates it because it is execution-time behavior needed at the
+   point of use, not because the ledger's definition changed.
 
 ## 2. Cycle start, once
 
@@ -111,9 +114,18 @@ Run this once per invocation, before the first item, whether the queue has one g
 
 Repeat for each item in queue order until the queue is exhausted or the cycle stops.
 
+0. **Skip the item if it collides with the user's own work.** Compare this group's file list
+   against the dirty paths recorded at cycle start (step 2). Any overlap ⇒ mark the item `skipped`
+   with the reason recorded and move to the next item, **without dispatching anything**. This check
+   belongs here, before any edit, not at commit time: once a subagent has written into a file that
+   already held uncommitted user content, the two are entangled in the working tree, and "leave it
+   uncommitted" does not disentangle them — that is exactly what *never reset, overwrite, stash, or
+   discard pre-existing user changes* (Hard rules) exists to prevent. The commit-time check in item 6
+   below stays as a backstop, for a path the group's file list did not name.
 1. **Re-measure this dimension only**: `measure.py --layers <this group's layers> --files <this
-   group's files>`, with files resolved transitively as in the measurement layers
-   (`<plugin-root>/references/metrics.md`). Confirm the finding is still alive by matching this
+   group's files>`. `--layers` is resolved transitively; `--files` is **not** — it is an exact
+   membership filter, so the file list passed here must already name everything the group covers
+   (see `<plugin-root>/references/metrics.md`). Confirm the finding is still alive by matching this
    group's `finding_ids`. If it is gone, mark the item `skipped` with the reason recorded and move to
    the next item — do not treat a stale ledger entry as still actionable.
 2. **Establish the narrow safety baseline before editing**, the same ladder a single-group fix
@@ -127,10 +139,12 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
    nothing else. The subagent inherits every rule in Hard rules above and the anti-gaming check in
    step 4 below.
    **Escalation, restored from v0.2.0:** if resolving the finding correctly requires a consequential
-   product or architecture decision with several reasonable outcomes, stop this item here and put
-   the smallest such decision to the user instead of guessing. This matters most in queue mode,
-   where a group can be as broad as "cache protocol copied into 16 files" and several designs are
-   equally plausible.
+   product or architecture decision with several reasonable outcomes, the subagent stops and
+   **returns the decision to the cycle rather than asking the user itself** — it holds a narrow brief
+   and, in an unattended run, has no one to ask. The cycle marks the item `skipped`, records the
+   question, and puts the smallest version of it to the user when the run ends, or immediately if
+   the user is present. This matters most in queue mode, where a group can be as broad as "cache
+   protocol copied into 16 files" and several designs are equally plausible.
 4. **Escalate checks narrow → broad**: the focused/regression tests from the safety baseline above,
    then the affected module's/package's suite, then typecheck/build/lint, then the project gate
    detected in step 2. Attribute any failure already recorded as pre-existing in step 2 to the
@@ -138,10 +152,12 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
 5. **Re-measure this group's dimension again and run the anti-gaming check** (step 4 below),
    including comparing the repo-wide `summary` against `queue.baseline_summary` from step 2.
 6. **Commit on a pass.** Stage only the exact paths the subagent touched for this group — never
-   `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). If any of
-   those paths was already dirty at cycle start, abort this item instead of committing: mark it
-   `failed`, leave the edits uncommitted, and continue to the next item rather than the whole cycle.
-   On success, mark the item `done` with the commit SHA.
+   `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). This is the
+   **backstop** for a path outside the group's declared file list — one item 0's comparison could
+   not catch because the subagent touched it without it being named. If any of the paths the
+   subagent actually touched was already dirty at cycle start, abort this item instead of
+   committing: mark it `failed`, leave the edits uncommitted, and continue to the next item rather
+   than the whole cycle. On success, mark the item `done` with the commit SHA.
 7. **A red gate stops the whole cycle.** This group's edits stay uncommitted; nothing already
    committed by an earlier item in this cycle is reverted. The human decides what happens next.
 
