@@ -24,13 +24,19 @@ def make_repo():
 
 
 class ParseTests(unittest.TestCase):
+    # Real 40-hex SHAs, because the parser detects a header record by that
+    # shape. Shorthand SHAs in test data force the production check to be
+    # weakened to something like "the first field is not numeric", which then
+    # crashes on a SHA that happens to be all decimal digits.
+    SHA_NEW = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+    SHA_OLD = "b2c3d4e5f60718293a4b5c6d7e8f901234567890"
     # Verified real `git log --numstat -z -M --format="%H%x09%aI%x09%aE"` output:
     # records are NUL-terminated, a rename is an EMPTY path field followed by
     # two separate path fields, and a binary file reports "-" for both counts.
     PAYLOAD = (
-        "sha2\t2026-09-08T11:00:00+03:00\tb@example.com\0"
+        SHA_NEW + "\t2026-09-08T11:00:00+03:00\tb@example.com\0"
         "1\t0\t\0src/old/mod.py\0src/new/mod.py\0"
-        "sha1\t2026-09-07T11:00:00+03:00\ta@example.com\0"
+        + SHA_OLD + "\t2026-09-07T11:00:00+03:00\ta@example.com\0"
         "-\t-\tblob.bin\0"
         "3\t0\tsrc/old/mod.py\0"
     )
@@ -63,6 +69,16 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(commits), 2)
         self.assertEqual(commits[0]["paths"], ["src/new/mod.py"])
         self.assertEqual(sorted(commits[1]["paths"]), ["blob.bin", "src/old/mod.py"])
+
+    def test_an_all_decimal_sha_is_still_a_header(self):
+        # 40 hex digits can legitimately be all decimal. A first-field-is-numeric
+        # heuristic misreads such a header as a numstat row and raises
+        # ValueError out of parse_log, breaking the never-raises contract.
+        sha = "1234567890" * 4
+        payload = sha + "\t2026-09-08T11:00:00+03:00\tb@example.com\0" "3\t0\tsrc/a.py\0"
+        commits, per_file = CH.parse_log(payload)
+        self.assertEqual(len(commits), 1)
+        self.assertEqual(list(per_file), ["src/a.py"])
 
 
 class MeasureTests(unittest.TestCase):

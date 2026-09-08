@@ -17,19 +17,21 @@ import re
 import subprocess
 from pathlib import Path
 
-# A header record starts with a SHA (40-hex in real git, or any non-numeric string
-# in tests) followed by a tab. Numstat rows start with added/removed counts
-# (digits or "-"), so we can distinguish by checking if the first field is numeric.
+# A header record starts with a 40-hex sha followed by a tab. Do not detect it
+# by field count or by "first field is not numeric": a numstat row for a path
+# containing "@" has the same three-field shape, and a SHA that happens to be
+# all decimal digits defeats the numeric heuristic.
+_HEADER_RE = re.compile(r"^[0-9a-f]{40}\t")
+
+
 def _is_header(record):
-    if not record or "\t" not in record:
-        return False
-    first_field = record.split("\t", 1)[0]
-    # Headers have non-numeric first field (SHA), numstat rows have numeric/dash
-    return not (first_field.isdigit() or first_field == "-")
+    return bool(_HEADER_RE.match(record))
 
 
 def parse_log(payload):
-    records = [r for r in payload.split("\0") if r != ""]
+    # Split by NUL; each record may have leading/trailing whitespace (newlines) from
+    # git output formatting, so strip those but preserve internal tabs and paths.
+    records = [r.lstrip("\n").rstrip("\n") for r in payload.split("\0") if r]
     commits = []
     per_file = {}
     current = None
