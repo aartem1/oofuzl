@@ -3,6 +3,18 @@
 Pattern matching implements gitwildmatch semantics, not fnmatch. This matters:
 `**/dist/**` must match top-level `dist/a.js` as well as `packages/web/dist/a.js`,
 and neither `fnmatch.fnmatch` nor `PurePath.match` gets that right.
+
+`SOURCE_EXT` is the other half of "which files exist": a tracked, non-binary
+file is not automatically source. Documentation, lockfiles and configuration
+are text, and measuring them as code puts a 1000-line design document into
+`summary.by_cut` and produces `file_too_long` findings nobody can act on --
+observed on this plugin's own repository, where 40 `.md` files outnumbered
+16 `.py` files and three of three hard file-level findings were prose.
+`guard.py` has always filtered by the same set (its `SUPPORTED_EXT`); before
+this set existed the audit and the ratchet disagreed about what a file even
+is. The two copies are pinned to each other by
+`tests/test_parser_agreement.py`, the same way the CSV parser and the
+thresholds are.
 """
 
 import collections
@@ -19,6 +31,15 @@ WALK_SKIP_DIRS = {
 }
 
 BINARY_PROBE_BYTES = 8192
+
+# The one definition of "this file is code". Duplicated verbatim in
+# `guard.py` as `SUPPORTED_EXT` -- that file never imports code_health --
+# and pinned to this copy by tests/test_parser_agreement.py.
+SOURCE_EXT = frozenset({
+    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java",
+    ".kt", ".rs", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp",
+    ".cs", ".swift", ".scala", ".lua", ".m", ".mm",
+})
 
 
 def compile_pattern(pattern):
@@ -108,7 +129,7 @@ def enumerate_files(repo_root, cfg, restrict=None):
     max_bytes = cfg["max_file_bytes"]
 
     source, tests = [], []
-    skipped = {"binary": 0, "too_large": 0, "symlink": 0}
+    skipped = {"binary": 0, "too_large": 0, "symlink": 0, "not_source": 0}
 
     for rel in candidates:
         abs_path = repo_root / rel
@@ -118,6 +139,12 @@ def enumerate_files(repo_root, cfg, restrict=None):
         if not abs_path.is_file():
             continue
         if matches_any(rel, exclude):
+            continue
+        if os.path.splitext(rel)[1] not in SOURCE_EXT:
+            # Tracked, readable, and not code. Counted rather than dropped
+            # silently, so "412 files" and "40 files were not measured as
+            # source" are both visible in the same summary.
+            skipped["not_source"] += 1
             continue
         try:
             size = abs_path.stat().st_size

@@ -158,9 +158,18 @@ never descends into `.git`. Otherwise `os.walk` with a hardcoded skip list
 (`.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.venv`, `venv`, `.tox`, `.mypy_cache`,
 `.ruff_cache`).
 
-Then, in order: drop symlinks; drop files whose first 8 KiB contain a NUL byte (binary); drop files
-over `max_file_bytes` (default 4 MiB) and count them in `summary.skipped`; apply `exclude`; split
-off `tests`.
+Then, in order: drop symlinks; apply `exclude`; **drop anything that is not source code** and count
+it as `summary.skipped.not_source`; drop files whose first 8 KiB contain a NUL byte (binary); drop
+files over `max_file_bytes` (default 4 MiB) and count them in `summary.skipped`; split off `tests`.
+
+**A tracked, readable text file is not automatically source.** `discovery.SOURCE_EXT` is the one
+definition of "this file is code" — the same set `guard.py` has always enforced as `SUPPORTED_EXT`,
+now shared and pinned by `tests/test_parser_agreement.py`. Without it the measurer and the ratchet
+disagree about what a file is: measured on this plugin's own repository, 40 Markdown files
+outnumbered 16 Python ones, three of three hard file-level findings were prose, and
+`summary.by_cut["1000"].loc_pct` was computed over two design documents — while `guard.py` skipped
+every one of them. Documentation, lockfiles and CI configuration are text and are still counted, as
+`not_source`, so "412 files" and "60 not measured as source" appear in the same summary.
 
 ### Excludes and the pattern matcher
 
@@ -227,7 +236,7 @@ just is not the same problem.
   "summary": {
     "files": 412, "loc": 91230, "tokens_total": 1094760,
     "tests": { "files": 96, "loc": 18400 },
-    "skipped": { "binary": 12, "too_large": 1 },
+    "skipped": { "binary": 12, "too_large": 1, "symlink": 0, "not_source": 137 },
     "by_cut": {
       "400":  { "files": 71, "loc": 52110, "loc_pct": 57.1 },
       "800":  { "files": 34, "loc": 44980, "loc_pct": 49.3 },

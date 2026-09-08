@@ -70,11 +70,29 @@ class EnumerateTests(unittest.TestCase):
         self.assertEqual(inv.tests, [])
 
     def test_binary_files_are_skipped_and_counted(self):
-        self.write("app/blob.bin", b"\x00\x01\x02binary")
+        # The binary probe only ever sees files that carry a source
+        # extension now, so the fixture has to be one: a UTF-16-encoded
+        # `.py` is the realistic case, since UTF-16 text is full of NUL
+        # bytes. A `.bin` never reaches this branch -- it is counted as
+        # not_source instead, one check earlier.
+        self.write("app/utf16.py", "x = 1\n".encode("utf-16"))
         self.write("app/main.py")
         inv = D.enumerate_files(self.root, self.cfg)
         self.assertEqual(inv.source, ["app/main.py"])
         self.assertEqual(inv.skipped["binary"], 1)
+
+    def test_documentation_and_config_are_not_measured_as_source(self):
+        """The audit used to measure every tracked text file. On this
+        repository that meant 40 Markdown files against 16 Python ones, and
+        `summary.by_cut` percentages computed over design documents."""
+        self.write("README.md", "# title\n")
+        self.write("package-lock.json", "{}\n")
+        self.write("ci.yaml", "on: push\n")
+        self.write("app/main.py")
+        inv = D.enumerate_files(self.root, self.cfg)
+        self.assertEqual(inv.source, ["app/main.py"])
+        self.assertEqual(inv.tests, [])
+        self.assertEqual(inv.skipped["not_source"], 3)
 
     def test_oversize_files_are_skipped_and_counted(self):
         cfg = dict(self.cfg, max_file_bytes=10)

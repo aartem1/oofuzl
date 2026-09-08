@@ -43,6 +43,11 @@ DEFAULT_THRESHOLDS = {
 }
 DEFAULT_CHARS_PER_TOKEN = 4
 
+# "This file is code." A verbatim copy of code_health/discovery.py's
+# SOURCE_EXT -- duplicated for the same reason the CSV parser below is, and
+# pinned to that copy by tests/test_parser_agreement.py. The audit and the
+# ratchet disagreeing about what a file is was a real defect: the audit used
+# to measure Markdown as source while this hook never has.
 SUPPORTED_EXT = {
     ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java",
     ".kt", ".rs", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp",

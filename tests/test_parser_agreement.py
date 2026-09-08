@@ -48,6 +48,17 @@ class ParserAgreementTests(unittest.TestCase):
         self.assertEqual(len(numbers), len(set(numbers)),
                          "fixture must keep every numeric field distinct")
 
+    def test_both_use_the_same_source_extension_set(self):
+        """The audit and the ratchet must agree on what a file even is.
+
+        They did not: `discovery.enumerate_files` measured every tracked
+        non-binary file, so 40 `.md` files were measured as source on this
+        repository while `guard.py` had always filtered by `SUPPORTED_EXT`.
+        """
+        from code_health import discovery as D
+        guard = load_guard()
+        self.assertEqual(set(D.SOURCE_EXT), set(guard.SUPPORTED_EXT))
+
     def test_both_use_the_same_default_thresholds(self):
         from code_health import config as C
         guard = load_guard()
