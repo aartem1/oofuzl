@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,6 +106,56 @@ class NestingAgreementTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
         self.assertEqual(mine[0]["nesting"], 3)
+
+    def test_guard_and_pyast_agree_on_non_if_constructs(self):
+        """Both fixtures above reach their depth entirely through `if`
+        chains. Proved by mutation that this leaves a real gap: breaking
+        guard.py's `for`/`while`/`try` branch of `_max_depth` (the
+        `depth + 1` in the non-`If` arm of the loop) left both of them
+        green, because neither one ever exercises that branch. This
+        fixture reaches its depth only through
+        `for` -> `while` -> `try`/`except` -> `with` (and, when the running
+        interpreter supports it, one more level through `match`/`case`),
+        with the expected depth pinned as its own assertion -- so this
+        test fails on either a disagreement between the two
+        implementations OR an absolute value both get wrong the same way.
+        """
+        base = (
+            "def f(xs):\n"
+            "    for x in xs:\n"
+            "        while x:\n"
+            "            try:\n"
+            "                with open('a') as fh:\n"
+        )
+        if sys.version_info >= (3, 10):
+            base += (
+                "                    match x:\n"
+                "                        case 1:\n"
+                "                            return 1\n"
+                "                        case _:\n"
+                "                            return 0\n"
+            )
+            expected = 5     # for -> while -> try -> with -> match/case
+        else:
+            base += "                    return 1\n"
+            expected = 4     # for -> while -> try -> with
+        source = base + (
+            "            except ValueError:\n"
+            "                pass\n"
+            "    return 0\n"
+        )
+
+        root = Path(tempfile.mkdtemp())
+        (root / "mixed.py").write_text(source, encoding="utf-8")
+
+        guard = load_guard()
+        theirs = guard._python_nesting(source)
+        mine, errors = PA.measure_nesting(root, ["mixed.py"])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["nesting"], expected)
+        self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
 
 
 if __name__ == "__main__":
