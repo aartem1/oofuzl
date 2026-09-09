@@ -173,6 +173,22 @@ class CommentedOutTests(unittest.TestCase):
         result = CM.is_commented_out(pathological)
         self.assertFalse(result)
 
+    def test_refuses_directive_text_on_its_own_regardless_of_caller_order(self):
+        """`is_commented_out` carries its own internal `is_directive` guard.
+
+        This was checked directly against `classify_file` by swapping
+        `is_directive` and `is_commented_out` there: the verdict for a TODO
+        whose body also parses as code (`x = 1`) did not change either way,
+        because `is_commented_out` refuses directive text before it ever
+        looks for code. That redundancy is deliberate defence in depth --
+        directive metadata must never read as code even if some future
+        caller invokes this function without gating on `is_directive` first
+        -- so this test pins the function's own behaviour, not an ordering
+        in `classify_file` (contrast `GateOrderTests`, whose three cases
+        each fail if their two named gates are swapped there).
+        """
+        self.assertFalse(CM.is_commented_out("TODO: x = 1"))
+
 
 class CoherenceTests(unittest.TestCase):
     def test_identifier_splits_on_camel_and_snake(self):
@@ -431,9 +447,14 @@ class CorpusPrecisionTests(unittest.TestCase):
 class GateOrderTests(unittest.TestCase):
     """Pin the order the classification gates run in, not just the outcome.
 
-    Each case is chosen so that swapping its two named adjacent gates flips
-    the verdict; a test that only checks the final bucket, without a case
-    shaped like this, would not notice a reordering.
+    Each of these three cases is chosen so that swapping its two named
+    adjacent gates in `classify_file` flips the verdict -- confirmed by
+    actually performing that swap for each one; a test that only checks the
+    final bucket, without a case shaped like this, would not notice a
+    reordering. A fourth candidate case (directive vs. commented_out) was
+    removed from here: `is_commented_out` already refuses directive text on
+    its own, so no ordering in `classify_file` was actually being pinned by
+    it -- see `CommentedOutTests.test_refuses_directive_text_on_its_own_regardless_of_caller_order`.
     """
 
     def test_commented_out_gate_runs_before_prose_immunity(self):
@@ -446,17 +467,6 @@ class GateOrderTests(unittest.TestCase):
         got = CM.classify_file("# return None\nx = 1\n", ".py")
         self.assertEqual(got["evidence"]["commented_out"]["lines"], [1])
         self.assertEqual(got["evidence"]["immune"], 0)
-
-    def test_directive_gate_runs_before_the_commented_out_detector(self):
-        """`is_directive` must run before `is_commented_out`.
-
-        `x = 1` inside the comment body also reads as an assignment
-        statement; swapping the gates would classify the TODO as code
-        instead of leaving it as directive metadata.
-        """
-        got = CM.classify_file("# TODO: x = 1\ny = 2\n", ".py")
-        self.assertEqual(got["evidence"]["immune"], 1)
-        self.assertEqual(got["evidence"]["commented_out"]["lines"], [])
 
     def test_directive_gate_runs_before_the_short_inline_detector(self):
         """`is_directive` must run before the short-inline word count.
