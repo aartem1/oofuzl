@@ -105,6 +105,7 @@ missing rows imply the repository has no issues there:
 | Maintainability rating / debt | `not measured` |
 | Cognitive complexity | `not measured`; CCN (from L2 `lizard`) reported instead, labelled as such |
 | Complexity (CCN), Size, Token cost, Duplication, Churn | measured (L2/L3) |
+| Comment noise | measured (L2), independent of Sonar — but it has its own `not_measured` case; read `layers.comments.status`, step 10 |
 
 **Consequence, said plainly, not implied:** a Sonar-less audit can **structurally never raise a
 P0** — the P0 tier is defined by correctness/security evidence that only L1 produces. Say this in
@@ -268,9 +269,23 @@ back to the old budget, that just drops one of those silently.
    status (if L1 ran), analyzed revision/time, and whether Sonar was reused or freshly scanned.
    When `L1: not_measured`/`partial`, say so with the reason here, not only in the Scorecard.
 3. **Scorecard** — Reliability, Security, Maintainability, Complexity, Duplication, Coverage, plus
-   the new **Size**, **Token cost**, **Churn** rows. Every row carries a plain-language status and
-   an explicit `measured` / `not measured` tag; use the step-3 table for what to write when
-   `not measured`.
+   the new **Size**, **Token cost**, **Churn** and **Comment noise** rows. Every row carries a
+   plain-language status and an explicit `measured` / `not measured` tag; use the step-3 table for
+   what to write when `not measured`.
+
+   **The Comment noise row** reads `layers.comments.status` and never softens it:
+   - `measured` — total `noise_comment_lines` and how many files carry any.
+   - `partial` — the same numbers, plus the layer's `reason` and `not_measured_files` verbatim.
+     Two causes are common and mean different things: files whose extension has no comment reader
+     (Ruby, PHP, Lua, Objective-C — `<plugin-root>/references/tools.md`), and a repository with no
+     measured Python file, where the `commented_out` class never ran at all and every file's
+     `evidence.commented_out` is `null`.
+   - `not_measured` — say so with the reason. A repository written entirely in a language with no
+     reader here produces this, and the honest row is "not measured", never "no comment noise
+     found".
+
+   A `0` from a `not_measured` layer, and a `null` `evidence.commented_out`, are never reported as
+   "clean" — that is the same defect this skill refuses for coverage and for JS/TS dead code.
 4. **Fix first** — at most five grouped priorities, labelled `A1`, `A2`, ... . For each: `P0`
    /`P1`/`P2`/`P3`; short problem name; why it matters (including any hotspot/fan-out/collision
    evidence that moved its priority); approximate scope (issue count/files/modules); recommended

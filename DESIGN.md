@@ -147,6 +147,7 @@ belongs to the `audit` skill, not to the measurer.
 | `dead` | file enumeration | `dead_symbol` (Python only; see "L2 — dead code") |
 | `churn` | git history | — (feeds `derived`) |
 | `derived` | `size` + `churn` + `imports` | `hotspot`, `symbol_collision`, `edit_fanout` |
+| `comments` | file enumeration | `comment_noise` (see "L2 — comments") |
 
 A requested layer whose dependency is unavailable is `not_measured` with the dependency named as
 the reason, not silently empty. `derived` reads the symbol table out of `imports`, which is why
@@ -236,7 +237,10 @@ just is not the same problem.
     "dead":    { "status": "not_measured", "reason": "vulture unavailable" },
     "churn":   { "status": "measured",     "window_days": 180, "history_span_days": 412, "files": [...] },
     "derived": { "status": "measured",     "hotspots": [...], "symbol_collisions": [...],
-                 "edit_fanout": [...] }
+                 "edit_fanout": [...] },
+    "comments":{ "status": "partial",      "languages_measured": ["brace"],
+                 "reason": "3 file(s) have no comment reader for their extension; commented_out is Python-only and this repository has no measured Python file",
+                 "not_measured_files": 3, "files": [...] }
   },
   "findings": [
     { "id": "file_too_long:backend/reports.py",

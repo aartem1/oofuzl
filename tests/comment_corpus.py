@@ -7,13 +7,15 @@ What this corpus is: a regression pin written alongside `comments.py` by the
 same person who wrote the detectors, so a perfect score on it is expected and
 is not an unbiased precision estimate -- every row was picked because its
 author already knew which way it should fall. What it is not: the source of
-the published per-class precision figures. Those come from Steidl (ICPC 2013)
-and Oztas (MSR 2025); the real false-positive rate on code this repository
-did not write gets observed only when the thresholds are calibrated against
-live repositories (Task 9). This repository refuses to publish a number
-nobody checked, and that rule applies to this corpus's own score too: treat
-a green `CorpusPrecisionTests` run as "no known regression," not as "measured
-precision."
+any published precision figure. The literature's ~0.89/~0.90 (Steidl, ICPC
+2013; Oztas, EASE 2025) describes the algorithms this module descends from,
+not this implementation; the false-positive rate on code this repository did
+not write was observed by inspecting every flagged line across three live
+repositories, and both figures are set out in `references/metrics.md`, "Where
+`comment_noise`'s precision figures come from". This repository refuses to
+publish a number nobody checked, and that rule applies to this corpus's own
+score too: treat a green `CorpusPrecisionTests` run as "no known regression,"
+not as "measured precision."
 """
 
 # (source, extension, expected class)
