@@ -152,9 +152,9 @@ _BLOCK_KEYWORD = re.compile(r"^\s*(if|elif|else|for|while|with|try|except|finall
 # `\b` alone is not a token boundary here: it fires on the transition between
 # a word character and a hyphen, so the old pattern matched "continue" inside
 # "continue-on-error" and flagged `except Exception as exc:  # continue-on-error
-# (CancelledError propagates` as commented-out code (real comment, xhh). The
-# lookahead below additionally refuses a following hyphen, which `\b` alone
-# does not.
+# (CancelledError propagates` as commented-out code (real comment,
+# jira-resource-allocation). The lookahead below additionally refuses a
+# following hyphen, which `\b` alone does not.
 _STATEMENT_KEYWORD = re.compile(r"^\s*(return|break|continue|yield|raise)(?![\w-]).*")
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
@@ -236,10 +236,14 @@ def _is_type_expression(node):
     `dict[str, Any]` is a Subscript, `typing.Optional[Config]` an Attribute
     (dotted name) feeding a Subscript, `int | None` a BinOp/BitOr of two type
     expressions -- all three are commented-out code when found as a valueless
-    annotation. A bare Name is trusted only against `_ANNOTATION_TYPE_NAMES`;
-    anything else in this position -- a Compare, a Call, an arbitrary Name --
-    is not Python's type-annotation grammar and is prose that happened to
-    parse, however code-shaped its colon makes it look.
+    annotation. A bare Name is trusted only against `_ANNOTATION_TYPE_NAMES`:
+    the allow-list cannot tell a project-local type name (`cfg: Config`,
+    perfectly legitimate annotation grammar) from an ordinary word sitting in
+    the same position, so it accepts only names it already knows, and a
+    local alias is a false negative taken deliberately -- a precision-for-
+    recall trade, not a grammar violation. Anything else in this position --
+    a Compare, a Call, an arbitrary Name not on the list -- is prose that
+    happened to parse, however code-shaped its colon makes it look.
     """
     if isinstance(node, (ast.Subscript, ast.Attribute)):
         return True
@@ -316,10 +320,10 @@ def _line_is_code(line):
 
     if not tree.body:
         # `BRAND = (214, 0, 28)  # #D6001C -- HH brand red (service.hh),
-        # primary accent` (real comment, xhh): the nested '#' before "D6001C"
-        # opens a Python comment that truncates everything after it, so this
-        # parses -- but to an empty module. An empty parse is not evidence
-        # of code.
+        # primary accent` (real comment, jira-resource-allocation): the
+        # nested '#' before "D6001C" opens a Python comment that truncates
+        # everything after it, so this parses -- but to an empty module. An
+        # empty parse is not evidence of code.
         return False
 
     # Bare expressions without calls are prose, not code.

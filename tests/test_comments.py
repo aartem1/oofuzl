@@ -173,11 +173,12 @@ class CommentedOutTests(unittest.TestCase):
         'Format: "MemAvailable:   1234567 kB"',
         # Metrics-direction note (Fix 4): a call with a space before "(".
         "lower_is_better (default)",
-        # except-handler comment, xhh (Fix 5): "continue" inside
-        # "continue-on-error" is not the `continue` statement keyword.
+        # except-handler comment, jira-resource-allocation (Fix 5): "continue"
+        # inside "continue-on-error" is not the `continue` statement keyword.
         "continue-on-error (CancelledError propagates",
-        # BRAND tuple's inline comment, xhh (Fix 2): the nested '#' before
-        # "D6001C" opens a Python comment, truncating the parse to nothing.
+        # BRAND tuple's inline comment, jira-resource-allocation (Fix 2): the
+        # nested '#' before "D6001C" opens a Python comment, truncating the
+        # parse to nothing.
         "#D6001C — HH brand red (service.hh), primary accent",
         "data,",
         "x",

@@ -50,7 +50,7 @@ Four things Sonar cannot do at any setting, and which this plugin therefore owns
 | Layer | Tools | Produces | Consumers |
 |---|---|---|---|
 | **L1 Sonar** | own quality profile (fork of `Sonar way` + S138/S104/S134/S107) | rules, history, quality gate, cognitive complexity, reliability/security findings, coverage, hotspots | `audit` only; **optional** — no Docker ⇒ layer marked `not_measured`, audit continues |
-| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
+| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, own comment reader (`tokenize`, `ast`, a brace-comment scanner; no external tool), direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, comment noise, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
 | **L3 derived** | own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` |
 
 Every layer is always present in the output with an explicit
