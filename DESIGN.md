@@ -447,8 +447,17 @@ scored a perfect `1.0` before the floor was added. Exact equality still matches 
 parser, the same precedent as `symbol_collision` and `dead_symbol` above. For a brace language its
 evidence field is `null`, never an empty list: an empty list would read as "checked, found
 nothing" for a class nobody checked there. `trivial_doc` and `short_inline` run for Python and for
-the same brace-language declaration reader the near-duplicate pass's own scanner is built from,
-verified the same flat-vs-deep way as lizard's nesting column (`references/tools.md`).
+the brace languages whose **declarations** a per-extension probe resolves — not for every language
+whose comments the scanner can read. Both halves are required: a file whose comments are read but
+whose declarations are invisible reports `trivial_doc: 0` on every file, which is the same silent
+zero as lizard's nesting column one level down. The probe feeds one realistic declaration per
+extension and `BRACE_EXT` keeps only the extensions that pass; it found C++ out-of-line member
+definitions (`int Cache::load_all(int fd) {`) invisible, which was fixed, and Objective-C's
+`- (void)loadAll:(int)x {` unmatched by any of the three declaration shapes, which removed `.m` and
+`.mm` from the set. Objective-C, Objective-C++, Ruby, PHP and Lua are `not_measured` and named as
+such. The full table, the two removals and the known recall gaps inside a passing language are in
+`references/tools.md`; the probe ships as `BraceLanguageProbeTests`, which also asserts that no
+extension can join `BRACE_EXT` without a passing probe row.
 
 **`short_inline` is evidence-only.** Measured at ~0.70 precision, below the 0.85 floor this
 repository requires of a counted class; never summed into `noise_comment_lines` and never its own

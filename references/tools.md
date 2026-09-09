@@ -263,3 +263,94 @@ d.py:5: unused method 'helper' (60% confidence)
 
 Both the symbol name and the confidence are extracted; the name is what makes a `dead_symbol`
 finding id stable when lines move above it.
+
+## Own comment reader — `scripts/code_health/comments.py`
+
+No external tool: `tokenize` + `ast` for Python, an own `//` + `/* */` scanner for brace languages.
+Which extensions the brace side is allowed to claim is decided by a probe, for the same reason
+lizard's nesting column above is: a reader that half-works reports a number nobody checked.
+
+**The declaration probe.** `trivial_doc` needs two things from a file — the comment, and the name of
+the declaration the comment sits on. `extract_brace` supplies the first for anything using `//` and
+`/* */`; `declarations_brace` supplies the second, and it is a line-shape matcher, not a parser. A
+language whose declaration syntax it does not recognise still yields comments, so **every file of
+that language reports `trivial_doc: count 0` and the layer reports `status: measured`** — "checked,
+found nothing" for a language whose declarations are invisible. That is the same defect as lizard's
+nesting counter one level down, so admission to `BRACE_EXT` is decided by feeding one realistic
+declaration per extension and recording what comes back:
+
+```
+.c      static int read_block(int fd) {              -> read_block        pass
+.h      static inline int cache_size(void) {         -> cache_size        pass
+.cpp    int Cache::load_all(int fd) {                -> load_all          pass (after the :: fix)
+.cc     std::string Cache::name() const {            -> name              pass (after the :: fix)
+.hpp    class Cache {                                -> Cache             pass
+.cs     public async Task<int> LoadAll(int fd) {     -> LoadAll           pass
+.java   public double returnTotalPrice() {           -> returnTotalPrice  pass
+.js     function returnTotalPrice() {                -> returnTotalPrice  pass
+.jsx    export function UserRow(props) {             -> UserRow           pass
+.mjs    export async function loadAll() {            -> loadAll           pass
+.cjs    const load = function(x) {                   -> load              pass
+.ts     export interface FiltersState {              -> FiltersState      pass
+.tsx    export const UserRow = (props: Props) => {   -> UserRow           pass
+.go     func (c *Cache) LoadAll() []Entry {          -> LoadAll           pass
+.kt     fun loadAll(fd: Int): Int {                  -> loadAll           pass
+.rs     pub fn parse_all(x: u8) -> u8 {              -> parse_all         pass
+.swift  func loadAll(fd: Int) -> Int {               -> loadAll           pass
+.scala  def loadAll(fd: Int): Int = {                -> loadAll           pass
+
+.m      - (void)loadAllMarkers:(int)x {              -> {}                FAIL — removed
+.mm     - (void)loadAllMarkers:(int)x {              -> {}                FAIL — removed
+```
+
+The probe is the shipped test `BraceLanguageProbeTests` in `tests/test_comments.py`, and
+`test_the_probe_covers_every_extension_in_brace_ext` asserts the two lists are the same set — an
+extension cannot be added to `BRACE_EXT` without a probe row that passes.
+
+**What the probe changed.**
+
+- **C++ out-of-line member definitions were invisible.** `int Cache::load_all(int fd) {` — the
+  ordinary shape of a definition whose declaration lives in the header — resolved to `{}`, so
+  `.cpp`, `.cc`, `.hpp` and `.h` all reported measured zeros for their most common declaration.
+  Fixed rather than dropped: `_TYPED_DECL` now accepts `::` in the return type (`std::string …`)
+  and before the captured name, which reports the bare method name (`load_all`), the same way the
+  Go receiver form reports `LoadAll` rather than `(c *Cache) LoadAll`. Only the **doubled** colon is
+  accepted; a single one would make the JS object literal `handler: makeHandler(x),` read as a
+  declaration of `makeHandler`, a call-site false positive `_is_statement` cannot catch because the
+  line ends in a comma rather than a `;`.
+
+- **`.m` and `.mm` are removed — Objective-C and Objective-C++ are `not_measured`.** Objective-C's
+  method syntax, `- (void)loadAllMarkers:(int)x {`, matches none of the three declaration shapes:
+  it is not a keyword form, not an arrow form, and the typed form requires the name to be preceded
+  by whitespace-separated type tokens, not by a parenthesised return type. Supporting it needs a
+  fourth declaration grammar with its own selector-splitting rules, which no other extension in the
+  set exercises; until one exists with the same verification these three have, the honest report is
+  "no reader", not a zero. `.m` carries a second, independent defect that would disqualify it even
+  with an Objective-C declaration reader: **`.m` is MATLAB at least as often as it is Objective-C**,
+  MATLAB comments are `%` and invisible to this scanner, and MATLAB's transpose operator `'` makes
+  `_skip_literal` open a string literal that is never closed and swallows the rest of the file.
+  Verified on a real MATLAB source: `extract(src, ".m")` returned `[]`, i.e. a measured zero on a
+  file that is nothing but comments and code the reader cannot see. `discovery.SOURCE_EXT` still
+  lists `.m` — that is a different list, for file inventory rather than comment reading, and it is
+  unaffected.
+
+- **`.lua`, `.rb` and `.php` were never in the set** and stay out one step earlier, at the comment
+  scanner rather than at the declaration probe: `--`, `#` plus `=begin`, and three syntaxes one of
+  which is `#`, none of which `extract_brace` reads at all. `extract` returns `None` for them,
+  `classify_file` returns `None`, and `measure_comments` counts them in `not_measured_files`.
+
+**Known recall gaps inside a passing language.** These are missed declarations, not invisible
+languages — the extension resolves its ordinary declaration and these particular shapes do not:
+
+```
+.h/.hpp   int cache_load(int fd);                        prototype, no body
+.cpp      template <typename T> T Cache<T>::get(int i) {  templated member definition
+.rs       impl Cache { / trait Loader {                   impl and trait blocks
+.kt       object Registry {                               Kotlin object declaration
+```
+
+The prototype miss is deliberate and already pinned by
+`test_prototype_without_a_body_is_a_deliberate_miss`: `int f(void);` ends in `;` and is
+indistinguishable on that evidence from `throw makeError(x);`, so rejecting both is the accepted
+cost of rejecting the call-site false positives. The other three are unimplemented shapes; a
+comment above one of them reaches `zero_coherence` or no bucket at all, never a wrong attribution.
