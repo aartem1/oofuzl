@@ -226,6 +226,20 @@ class CommentedOutTests(unittest.TestCase):
         result = CM.is_commented_out(pathological)
         self.assertFalse(result)
 
+    def test_cyrillic_identifier_does_not_shift_the_space_check(self):
+        """`end_col_offset` is a UTF-8 byte offset, not a character index.
+
+        Verified: `кэш(x, y)` reports `end_col_offset=6` against a
+        9-character, 12-byte line. Indexed by character that lands on the
+        space inside the argument list, so the call read as prose and the
+        line was missed; indexed by byte it lands on the `(`. The spaced form
+        must still be rejected, or the fix would only have moved the bug.
+        """
+        self.assertTrue(CM.is_commented_out("кэш(x, y)"))
+        self.assertFalse(CM.is_commented_out("кэш (x, y)"))
+        self.assertTrue(CM.is_commented_out("получить_кэш(ключ, значение)"))
+        self.assertFalse(CM.is_commented_out("получить_кэш (ключ, значение)"))
+
     def test_refuses_directive_text_on_its_own_regardless_of_caller_order(self):
         """`is_commented_out` carries its own internal `is_directive` guard.
 

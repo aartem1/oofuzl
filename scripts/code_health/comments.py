@@ -324,11 +324,21 @@ def _has_call_with_space_before_parenthesis(tree, line):
     essentially never has it while English prose often does; contrast the
     genuine commented-out call `put_oauth_error_state(self,
     HTTPStatus.FORBIDDEN)` (real comment, xhh), which has none.
+
+    `end_col_offset` is a UTF-8 **byte** offset, so the line is indexed as
+    bytes. Indexing it as characters shifts left by one position per
+    non-ASCII character already on the line: `кэш(x, y)` reports
+    `end_col_offset=6` against a 9-character, 12-byte line, and `line[6]` is
+    the space inside the argument list -- so genuinely commented-out code
+    with a Cyrillic identifier was silently rejected as prose. Two of the
+    three repositories this discriminator was tuned against are
+    Russian-language.
     """
+    raw = line.encode("utf-8")
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             end = node.func.end_col_offset
-            if end is not None and end < len(line) and line[end] != "(":
+            if end is not None and end < len(raw) and raw[end:end + 1] != b"(":
                 return True
     return False
 

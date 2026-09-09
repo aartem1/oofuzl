@@ -201,6 +201,15 @@ CORPUS = [
     ("# put_oauth_error_state(self, HTTPStatus.FORBIDDEN)\nx = 1\n",
      ".py", "commented_out"),
 
+    # Fix 4 round 2: `end_col_offset` is a UTF-8 byte offset, and the space
+    # check indexed the line by character. Every non-ASCII character before
+    # the callee's end shifted the index left by one, so a Cyrillic-named
+    # call landed on the space inside its own argument list and was rejected
+    # as prose -- on two of the three repositories this discriminator was
+    # tuned against, both Russian-language.
+    ("# получить_кэш(ключ, значение)\nx = 1\n", ".py", "commented_out"),
+    ("# получить кэш (ключ, значение)\nx = 1\n", ".py", "clean"),
+
     # Fix 5: a statement keyword must match a whole token, not just a `\b`
     # boundary a hyphen also satisfies. Verbatim shape of `except Exception
     # as exc:  # continue-on-error (CancelledError propagates`, where the
