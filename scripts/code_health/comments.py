@@ -264,6 +264,9 @@ def _strip_stars(body):
 # trivial cases, over 80% agreed. Correctness of the automatic verdict: ~90%.
 TRIVIAL_COHERENCE = 0.5
 
+# A digit stays glued to the segment before it (`name2` in `name2Value`) --
+# the only boundary the pattern below recognises there is lower/digit -> upper,
+# which falls after the digit, not before it.
 _SPLIT_RE = re.compile(
     r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
@@ -313,27 +316,48 @@ def declarations_python(text):
     return out
 
 
-# Two declaration shapes cover the brace languages this module reads: a
-# keyword form (`function f`, `class C`, `func F`, `fn f`, `struct S`) and the
-# C/Java/C# typed form (`static int read_block(`). A bare `name(` is excluded
-# on purpose -- that is a call site, and treating it as a declaration would
-# attach every comment above a call to the callee's name.
+# Three declaration shapes cover the brace languages this module reads: a
+# keyword form (`function f`, `class C`, `func F`, `fn f`, `struct S`, and a Go
+# receiver method `func (c *Cache) Load()`), an arrow/lambda form bound to a
+# name (`const load = async () => {`, `const load = function() {`), and the
+# C/Java/C# typed form (`static int read_block(`, `static char *read_line(`).
+# A bare `name(` is excluded on purpose -- that is a call site, and treating
+# it as a declaration would attach every comment above a call to the callee's
+# name.
 _KEYWORD_DECL = re.compile(
     r"^[^\S\n]*(?:[\w@$]+[^\S\n]+)*?"
     r"(?:function|func|fn|class|struct|interface|type|enum|protocol)"
-    r"[^\S\n]+([A-Za-z_$][\w$]*)")
+    r"[^\S\n]+(?:\([^)]*\)[^\S\n]+)?([A-Za-z_$][\w$]*)")
+_ARROW_DECL = re.compile(
+    r"^[^\S\n]*(?:export[^\S\n]+)?(?:const|let|var)[^\S\n]+([A-Za-z_$][\w$]*)"
+    r"[^\S\n]*=[^\S\n]*(?:async[^\S\n]+)?(?:\([^)]*\)[^\S\n]*=>|function\b)")
 _TYPED_DECL = re.compile(
-    r"^[^\S\n]*(?:[\w.<>\[\]*&$]+[^\S\n]+)+([A-Za-z_$][\w$]*)[^\S\n]*\(")
+    r"^[^\S\n]*(?:[\w.<>\[\]*&$]+[^\S\n]+)+[*&]*([A-Za-z_$][\w$]*)[^\S\n]*\(")
 _NOT_A_DECL = frozenset({
     "if", "for", "while", "switch", "catch", "return", "else", "do", "with",
 })
 
 
+def _is_statement(line):
+    """True when TYPED_DECL matched a call site, not a declaration.
+
+    `throw makeError(x);`, `case handle(x):` and every other statement this
+    guards against ends in `;` or `:` once a trailing `//` comment is gone --
+    a declaration's line instead ends in `{` (`int f() {`) or in the closing
+    `)` of an Allman-style header whose brace sits on the next line.
+    """
+    code = line.split("//", 1)[0].rstrip()
+    return code.endswith((";", ":"))
+
+
 def declarations_brace(text):
     out = {}
     for number, line in enumerate(text.splitlines(), start=1):
-        match = _KEYWORD_DECL.match(line) or _TYPED_DECL.match(line)
-        if not match:
+        match = _KEYWORD_DECL.match(line) or _ARROW_DECL.match(line)
+        typed = match is None
+        if typed:
+            match = _TYPED_DECL.match(line)
+        if not match or (typed and _is_statement(line)):
             continue
         name = match.group(1)
         head = line.strip().split("(")[0].split()

@@ -179,6 +179,9 @@ class CoherenceTests(unittest.TestCase):
         self.assertEqual(CM.split_identifier("HTTPServerError"),
                          ["http", "server", "error"])
 
+    def test_digit_stays_with_the_preceding_segment(self):
+        self.assertEqual(CM.split_identifier("name2Value"), ["name2", "value"])
+
     def test_paper_example_scores_three_quarters(self):
         # Steidl, ICPC 2013: this exact pair is the paper's worked example.
         got = CM.coherence("removes all defined markers", "removeAllMarkers")
@@ -188,6 +191,10 @@ class CoherenceTests(unittest.TestCase):
         self.assertAlmostEqual(CM.coherence("markers", "marker"), 1.0)
 
     def test_two_edits_apart_do_not_match(self):
+        # True Levenshtein distance 2 ("rk" -> "rk" then "e"/"u", "r"/"p").
+        self.assertAlmostEqual(CM.coherence("marker", "markup"), 0.0)
+
+    def test_three_edits_apart_do_not_match(self):
         self.assertAlmostEqual(CM.coherence("marker", "mask"), 0.0)
 
     def test_comment_with_no_words_returns_none(self):
@@ -227,11 +234,66 @@ class BraceDeclarationTests(unittest.TestCase):
         self.assertEqual(CM.declarations_brace("static int read_block(int fd) {\n"),
                          {1: "read_block"})
 
-    def test_call_site_is_not_a_declaration(self):
-        self.assertEqual(CM.declarations_brace("    doWork(x);\n"), {})
+    def test_go_method_with_receiver(self):
+        self.assertEqual(CM.declarations_brace("func (c *Cache) Load() error {\n"),
+                         {1: "Load"})
 
-    def test_control_keyword_is_not_a_declaration(self):
-        self.assertEqual(CM.declarations_brace("    if (ready) {\n"), {})
+    def test_arrow_function_bound_to_a_name(self):
+        self.assertEqual(
+            CM.declarations_brace("export const load = async () => {\n"),
+            {1: "load"})
+        self.assertEqual(CM.declarations_brace("const handler = function(x) {\n"),
+                         {1: "handler"})
+
+    def test_pointer_return_with_star_bound_to_the_name(self):
+        self.assertEqual(
+            CM.declarations_brace("static char *read_line(FILE *f) {\n"),
+            {1: "read_line"})
+
+    def test_call_site_is_not_a_declaration(self):
+        # Each of these matches the TYPED shape's "token(s), then name, then
+        # (" syntax -- only the trailing `;`/`:` check tells a call site
+        # apart from a declaration whose brace sits on the same line.
+        for line in (
+            "    doWork(x);\n",
+            "await foo(x);\n",
+            "throw makeError(x);\n",
+            "new Foo(x);\n",
+            "typeof check(x);\n",
+            "yield foo(x);\n",
+            "case handle(x):\n",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(CM.declarations_brace(line), {})
+
+    def test_control_flow_parenthesis_is_not_a_declaration(self):
+        for line in (
+            "    if (ready) {\n",
+            "    for (;;) {\n",
+            "    while (x) {\n",
+            "    switch (x) {\n",
+            "    catch (e) {\n",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(CM.declarations_brace(line), {})
+
+    def test_control_keyword_before_a_bare_call_reaches_the_guard(self):
+        # `return factory(x)` (no trailing `;`, as under ASI) matches the
+        # TYPED shape structurally -- name "factory", ending in `)`. Only
+        # the `_NOT_A_DECL` check on the line's leading token stops this
+        # from being read as a declaration; this is the case the previous
+        # `if (ready) {` test never reached, because that line fails to
+        # match TYPED_DECL at all (nothing precedes its "(").
+        for keyword in ("return", "else", "do", "with"):
+            line = "    %s factory(x)\n" % keyword
+            with self.subTest(keyword=keyword):
+                self.assertEqual(CM.declarations_brace(line), {})
+
+    def test_prototype_without_a_body_is_a_deliberate_miss(self):
+        # `int f(void);` ends in `;`, indistinguishable on this evidence from
+        # `throw makeError(x);` above -- rejecting both is the accepted cost
+        # of rejecting the call-site false positives.
+        self.assertEqual(CM.declarations_brace("int f(void);\n"), {})
 
 
 class DeclarationDispatchTests(unittest.TestCase):
