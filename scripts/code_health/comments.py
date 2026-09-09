@@ -168,8 +168,9 @@ LONG_COMMENT_WORDS = 30
 
 # Steidl's first length rule: at this length or below, 70% of developers chose
 # to delete the comment or to fold its text into a function name. 0.70 is below
-# the 0.85 bar this repository sets for a counted class, so `short_inline` is
-# reported and never summed -- three classes added together would carry the
+# the 0.85 floor a counted class must clear -- this plugin's own rule, set in
+# `references/quality-policy.md` and inherited from nowhere -- so `short_inline`
+# is reported and never summed: three classes added together would carry the
 # precision of the weakest one.
 SHORT_INLINE_WORDS = 2
 

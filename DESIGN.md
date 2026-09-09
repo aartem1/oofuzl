@@ -463,20 +463,65 @@ such. The full table, the two removals and the known recall gaps inside a passin
 `references/tools.md`; the probe ships as `BraceLanguageProbeTests`, which also asserts that no
 extension can join `BRACE_EXT` without a passing probe row.
 
-**`short_inline` is evidence-only.** Measured at ~0.70 precision, below the 0.85 floor this
-repository requires of a counted class; never summed into `noise_comment_lines` and never its own
-group, but free to report once `fix` already has the file open.
+**`short_inline` is evidence-only.** Measured at ~0.70 precision, below the 0.85 floor a counted
+class must clear — this repository's own rule, stated in `references/quality-policy.md`, not a
+figure inherited from anywhere. Never summed into `noise_comment_lines` and never its own group,
+but free to report once `fix` already has the file open.
 
-**Published precision, not this repository's own corpus.** `trivial_doc` is reported at ~0.90 and
-`commented_out` at ~0.89 (Steidl et al., ICPC 2013) — the literature's validated figures;
-`trivial_doc`'s corroborated there by a 16-developer survey over 30 examples. `tests/comment_corpus.py`
-scores 1.00 precision on both counted classes, and that number is never published as a measured
-precision: it is a regression pin written alongside the detectors by their own author, over
-fixtures the same author chose because the answer was already known. The false-positive rate this
-metric actually carries on a given repository is what threshold calibration there observes, not
-what the corpus reports — the `warn`/`hard` values for `noise_comment_lines` are correspondingly
-not assigned yet, calibrated against observed figures the same way `parameters.hard` and
-`near_duplicate.min_similarity` were, rather than guessed.
+**Three precision numbers, three standards of evidence, not interchangeable.**
+
+*Ancestry, not measurement.* Steidl et al. (ICPC 2013) report ~0.90 for coherence-based trivial
+comment detection and ~0.89 for the commented-out-code feature, the second corroborated by a
+16-developer survey over 30 examples. Those figures describe the algorithms this layer **descends
+from**. They do not describe what ships here, and this document says so three paragraphs above:
+the decision rule is deliberately not Steidl's — the `any()` rule was replaced by a majority rule,
+Steidl's `0.1` was rejected as untransferable, and the four post-parse discriminators are this
+repository's own. Cite them for where the method came from; never as a measurement of this
+implementation.
+
+*This branch's own live-code result.* 15,318 source files across three real repositories, every
+flagged line read at its own line with its surrounding code:
+
+- `commented_out`: **11 flagged lines, 11 true positives** — two deprecated annotations carrying
+  `@deprecated` notes, two commented-out `put_oauth_error_state(...)` calls, and one seven-line
+  commented-out `check_employer_has_service(...)` block closed by a `tempexp_..._end` marker. Each
+  was read independently by two reviewers. Eleven positives is a small numerator: it supports "no
+  false positive was found in this sample", not a confident percentage, and no percentage is
+  quoted from it.
+- `trivial_doc`: **31 flagged lines in 28 comment records.** 13 lines are unambiguous restatements
+  (`"""Escape HTML entities."""` over `escape_html`, `"""Jira API error."""` over `class
+  JiraAPIError`). 14 lines are the shape below, a **section header**. 4 lines are false positives —
+  comments whose extra clause carries the information the identifier lacks, all four scoring
+  0.55–0.75, just over the 0.5 bar: `"""Map teams.name -> str(id) (developer_tasks.team is a
+  name)."""` over `_team_name_to_id`, `# получаем list[str] из list[{ string: str }]` over
+  `get_resume_list_str_value`, `# chatik deep link params` over `get_deep_link_query_params`, and
+  `"""Re-synthesize external presence into hr_employee_presence (replace)."""` over
+  `synthesize_and_replace_external_presence`.
+
+**Known characteristic: the section header is `trivial_doc`'s dominant live shape.** 14 of the 31
+flagged lines are a one- or two-word comment marking the start of a block of related declarations
+in a types or DTO file — `// Filters` over `export interface FiltersState`, `// Sync` over
+`export interface SyncError`, `# Education` over `class EducationLevelDTO`. Every one scores 0.67
+to 1.00, because a section header is by construction the name of the first thing under it. They
+satisfy the detector's definition exactly and are not a bug in it, but they are navigation for a
+human reading the file top to bottom rather than documentation of one declaration, and a `fix`
+session should treat them as a judgement call rather than a deletion. Read the class's live
+precision as 27/31 under the detector's own definition and 13/31 if section headers are counted as
+worth keeping; the honest report gives both and names the shape, which is why the class is capped
+at `P2` and its findings are evidence to inspect.
+
+*The corpus.* `tests/comment_corpus.py` scores 1.00 on both counted classes and that number is
+never published as a precision: it is a regression pin written alongside the detectors by their
+own author, over fixtures the same author chose because the answer was already known.
+
+**`noise_comment_lines` has no `warn`/`hard`, and calibration is what settled that.** The
+calibration ran over the same 15,318 files: p50, p75, p90, p95 and p99 are all `0`, with a maximum
+of 52. That is a rare-event distribution, not one with a meaningful cut — the plan's
+`warn = p90 / hard = p99` method would have set both to zero, flagging every file carrying a
+single noise line. Rather than invent a number the data does not contain, the metric sits in
+`references/metrics.md`'s "Metrics outside `config.thresholds`" table alongside `dead_symbol`, its
+exact analogue: per-occurrence, known false positives, fixed `level: "warn"`, `threshold: null`,
+capped at `P2`. There is no `config.thresholds` key for it and there never will be.
 
 **What this layer does not catch.** A comment that paraphrases its code in different words —
 `// loop through items` over `for item in items:` — shares no lexical overlap with it under

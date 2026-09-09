@@ -150,15 +150,37 @@ or P1 verdict requires elsewhere.
 ## Comment noise grouping
 
 Group `comment_noise` findings by subsystem/directory, never repository-wide, the same rule as
-`dead_symbol` above. The `trivial_doc` detector is measured at ~0.90 and `commented_out` at ~0.89
-(Steidl et al., ICPC 2013) — the literature's own figures, not this repository's regression corpus
-(`tests/comment_corpus.py`), which scores 1.00 on both counted classes because it is a pin written
-alongside the detectors by their own author, over fixtures the same author already knew the answer
-to; it is not a measured precision and must never be quoted as one. A `comment_noise` group is
-capped at **P2** for the same reason `dead_symbol` is: a verdict at 0.89–0.90 precision is evidence
-to inspect, not proof. The report also states what the detector cannot see — a comment that
-paraphrases the code in different words (`// loop through items` over `for item in items:`) shares
-no lexical overlap with it and needs a language model to catch, and this layer does not run one.
+`dead_symbol` above.
+
+**The 0.85 floor for a counted class is this plugin's own rule**, set here and nowhere else — it is
+not inherited from Steidl or from any other source, and nothing outside this repository requires it.
+A detected comment class is summed into `noise_comment_lines` only when its precision clears 0.85;
+below that it is reported in `evidence` and never counted, because summing classes gives the whole
+metric the precision of its weakest member. `short_inline`, at ~0.70, is the class this rule keeps
+out. Anywhere the floor is mentioned — `DESIGN.md` §5, the `comment_noise` row in
+`<plugin-root>/references/metrics.md`, `comments.py`'s own `SHORT_INLINE_WORDS` comment — it refers
+back to this paragraph.
+
+**Which precision figure to quote.** Three numbers exist and they are not interchangeable; the
+distinction and the evidence behind each are in `<plugin-root>/references/metrics.md`, "Where
+`comment_noise`'s precision figures come from". In short: the literature's ~0.89/~0.90 (Steidl et
+al., ICPC 2013) is the **ancestry** of the algorithm, not a measurement of what ships — the decision
+rule here is deliberately not Steidl's. This plugin's own live-code result over 15,318 files in
+three repositories is 11 of 11 `commented_out` lines true (a small numerator, so no percentage is
+quoted from it) and 31 `trivial_doc` lines of which 4 are false positives and 14 are section headers
+over a type declaration. The corpus's 1.00 (`tests/comment_corpus.py`) is a regression pin written
+alongside the detectors by their own author and must never be quoted as a measured precision.
+
+A `comment_noise` group is capped at **P2** for the same reason `dead_symbol` is: this is evidence
+to inspect, not proof. Two things the report states rather than leaving the reader to discover:
+
+- **A section header is a judgement call, not an automatic deletion.** `// Filters` over
+  `export interface FiltersState` scores 1.00 and is the dominant live shape of `trivial_doc`. It
+  satisfies the detector's definition, but it is navigation for a human reading a types file top to
+  bottom. Say so when a group is mostly this shape.
+- **What the detector cannot see.** A comment that paraphrases the code in different words
+  (`// loop through items` over `for item in items:`) shares no lexical overlap with it and needs a
+  language model to catch; this layer does not run one.
 
 ## The Sonar-less ceiling
 
