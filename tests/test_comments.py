@@ -328,6 +328,66 @@ class DocstringGateTests(unittest.TestCase):
         self.assertEqual(got["evidence"]["commented_out"]["count"], 0)
 
 
+class DocstringOwnerTests(unittest.TestCase):
+    """A docstring binds to the declaration above it, never the one below.
+
+    `classify_file` used to resolve every comment's owner as
+    `decls.get(end_line + 1) or decls.get(line - 1)` -- following declaration
+    first. That is right for a `#` comment above a `def` and wrong for a
+    docstring, whose owner is unambiguous: the declaration it is nested in.
+    """
+
+    def test_docstring_record_carries_its_owning_declaration(self):
+        got = CM.extract_python('def f():\n    """Return f."""\n    return 1\n')
+        record = next(c for c in got if c.text == "Return f.")
+        self.assertEqual(record.owner, "f")
+
+    def test_a_hash_comment_carries_no_owner(self):
+        got = CM.extract_python("# set up\nx = 1\n")
+        self.assertIsNone(got[0].owner)
+
+    def test_a_module_docstring_has_no_owner(self):
+        got = CM.extract_python('"""Load all markers."""\n'
+                                'def load_all_markers():\n    pass\n')
+        record = next(c for c in got if c.docstring)
+        self.assertIsNone(record.owner)
+
+    def test_factory_docstring_is_scored_against_the_factory(self):
+        """Verified false positive: this scored 1.00 against the nested
+        function and 0.33 against its real owner, and was counted.
+        A factory or decorator whose docstring names what it builds is
+        idiomatic Python.
+        """
+        src = ('def build_handler():\n'
+               '    """Make the handler."""\n'
+               '    def make_the_handler():\n'
+               '        pass\n')
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["count"], 0)
+        self.assertEqual(got["noise_comment_lines"], 0)
+
+    def test_module_docstring_is_not_scored_against_the_first_declaration(self):
+        src = ('"""Load all markers."""\n'
+               'def load_all_markers():\n    pass\n')
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["count"], 0)
+
+    def test_a_docstring_restating_its_own_declaration_still_fires(self):
+        # The fix must not cost the class its main case: Steidl's own worked
+        # example, and the same shape on a class.
+        for src in ('def remove_all_markers():\n'
+                    '    """Removes all markers."""\n    pass\n',
+                    'class UserCache:\n    """User cache."""\n    pass\n'):
+            with self.subTest(src=src.splitlines()[0]):
+                got = CM.classify_file(src, ".py")
+                self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [2])
+
+    def test_a_hash_comment_still_binds_to_the_declaration_below_it(self):
+        got = CM.classify_file("# increment counter\n"
+                               "def increment_counter():\n    pass\n", ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [1])
+
+
 class CoherenceTests(unittest.TestCase):
     def test_identifier_splits_on_camel_and_snake(self):
         self.assertEqual(CM.split_identifier("removeAllMarkers"),

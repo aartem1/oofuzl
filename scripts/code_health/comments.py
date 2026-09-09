@@ -29,8 +29,13 @@ from collections import namedtuple
 # and `feature_id:` / `code_owner:` metadata in `resume-profile-front` both
 # read as majority-code line by line while being documentation, not a
 # commented-out block. `classify_file` uses this field to keep the gate
-# out of a docstring's way while still running `trivial_doc` on it.
-Comment = namedtuple("Comment", "line end_line text inline docstring")
+# out of a docstring's way while still running `trivial_doc` on it. `owner`
+# is the name of the declaration a docstring documents, carried from the AST
+# node that produced it; it is `None` for every `#` comment (whose owner is
+# resolved by line arithmetic in `classify_file`) and for a module docstring,
+# which documents a file, not a name.
+Comment = namedtuple("Comment", "line end_line text inline docstring owner",
+                     defaults=(None,))
 
 
 def extract_python(text):
@@ -101,7 +106,8 @@ def _python_docstrings(text):
         expr = node.body[0]
         out.append(Comment(line=expr.lineno, end_line=expr.end_lineno,
                            text=ast.get_docstring(node).strip(), inline=False,
-                           docstring=True))
+                           docstring=True,
+                           owner=getattr(node, "name", None)))
     return sorted(out, key=lambda c: c.line)
 
 
@@ -616,7 +622,19 @@ def classify_file(text, ext, chars_per_token=4):
             if is_prose_immune(item.text):
                 immune += 1
                 continue
-            name = decls.get(item.end_line + 1) or decls.get(item.line - 1)
+            # A `#` comment's owner is ambiguous by position -- above a `def`
+            # or trailing after a statement -- so it is resolved by line
+            # arithmetic, following declaration first. A docstring's owner is
+            # not ambiguous at all: it is the declaration it is nested in, and
+            # `_python_docstrings` already had that node in hand. Deriving it
+            # by line arithmetic instead attributed a factory function's
+            # docstring to the function it builds -- `def build_handler():` /
+            # `"""Make the handler."""` / `def make_the_handler():` scored
+            # 1.00 against the nested function and was counted, against 0.33
+            # for its real owner -- and attributed a module docstring to
+            # whatever happened to be declared on line 2.
+            name = item.owner if item.docstring else (
+                decls.get(item.end_line + 1) or decls.get(item.line - 1))
             score = coherence(item.text, name) if name else None
             if score is not None and score > TRIVIAL_COHERENCE:
                 klass = "trivial_doc"
