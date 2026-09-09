@@ -99,16 +99,16 @@ _IMMUNE_PATTERNS = (
     r"|\bnosec\b|\bfmt:\s*(on|off)|\bisort:|\bNOSONAR\b|\bgo:generate\b"
     r"|\bruff:\s|\bmypy:",
     r"\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b",
-    r"\bcopyright\b|\blicen[sc]e\b|\bSPDX\b",
-    r"#\d+|\b[A-Z]{2,}-\d+\b|https?://",
+    r"\bcopyright\b|\blicen[sc]e\b|(?-i:\bSPDX\b)",
+    r"#\d+|(?-i:\b[A-Z]{2,}-\d+\b)|https?://",
     r"\bbecause\b|\bworkaround\b|\botherwise\b"
     r"|\bиначе\b|\bпотому что\b|\bпоэтому\b",
     r"\bms\b|\bmsec\b|\bsec\b|\bbytes?\b|\bUTC\b|\bepoch\b"
     r"|\b[01]-based\b|\bpx\b|\bhz\b",
     r"\binclusive\b|\bexclusive\b|\bвключительно\b",
-    r"\bnull\b|\bNone\b|\bnil\b|\bundefined\b|\bempty\b",
-    r"\bcaller must\b|\bowns\b|\bfrees\b|\bcloses\b|\breleases\b|освобожда",
-    r"^#!|-\*-\s*coding",
+    r"\bnull\b|(?-i:\bNone\b)|\bnil\b|\bundefined\b",
+    r"\bcaller must\b|\bowns\b|\bfrees\b|\breleases\b|\bосвобожда",
+    r"^#?!/|-\*-\s*coding",
 )
 _IMMUNE_RE = re.compile("|".join("(?:%s)" % p for p in _IMMUNE_PATTERNS),
                         re.IGNORECASE | re.MULTILINE)

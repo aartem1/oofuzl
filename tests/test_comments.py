@@ -90,12 +90,13 @@ class ImmunityTests(unittest.TestCase):
         "noqa: E501",
         "type: ignore[arg-type]",
         "eslint-disable-next-line no-console",
-        "TODO: drop after RAM-436",
+        "TODO: drop this fallback",
         "FIXME later",
         "Copyright 2026 Acme",
         "SPDX-License-Identifier: MIT",
         "see #1234 for the original report",
         "see https://bugs.example/1 for why",
+        "see RAM-436",
         "ms, not seconds",
         "end is exclusive",
         "returns None when the cache is cold",
@@ -103,6 +104,7 @@ class ImmunityTests(unittest.TestCase):
         "workaround for a driver bug",
         "иначе счётчик сбрасывается на втором проходе",
         "-*- coding: utf-8 -*-",
+        "!/usr/bin/env python3",
         " ".join(["word"] * 30),
     ]
     NOT_IMMUNE = [
@@ -110,6 +112,11 @@ class ImmunityTests(unittest.TestCase):
         "loop through the items",
         "removes all defined markers",
         "set x to 1",
+        "empty the cache before returning",
+        "closes the file handle",
+        "none of the retries succeeded",
+        "reads utf-8 from disk",
+        " ".join(["word"] * 29),
     ]
 
     def test_immune_texts(self):
