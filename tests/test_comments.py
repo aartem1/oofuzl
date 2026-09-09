@@ -295,6 +295,28 @@ class BraceDeclarationTests(unittest.TestCase):
         # of rejecting the call-site false positives.
         self.assertEqual(CM.declarations_brace("int f(void);\n"), {})
 
+    def test_call_site_with_trailing_block_comment_is_not_a_declaration(self):
+        # The `;` that condemns this line as a statement sits before a
+        # trailing `/* note */`, not before end of line -- the block comment
+        # must be stripped too, the same as a trailing `//` comment is.
+        self.assertEqual(
+            CM.declarations_brace("throw makeError(x); /* note */\n"), {})
+
+    def test_declaration_with_trailing_block_comment_still_matches(self):
+        self.assertEqual(
+            CM.declarations_brace("static int read_block(int fd) { /* sets up */\n"),
+            {1: "read_block"})
+
+    def test_unterminated_block_comment_is_treated_as_a_statement(self):
+        # `/* note` with no closing `*/` on this line hides text we cannot
+        # see -- it might continue as a comment, or the `*/` and real code
+        # might be on the next line. Guessing risks reintroducing the false
+        # positive this class exists to reject, so the unresolved case is
+        # treated as a statement: rejecting a real declaration here is
+        # cheaper than misattributing a comment to a call site's name.
+        self.assertEqual(
+            CM.declarations_brace("throw makeError(x); /* note\n"), {})
+
 
 class DeclarationDispatchTests(unittest.TestCase):
     def test_python_routes_to_ast(self):

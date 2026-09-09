@@ -342,10 +342,22 @@ def _is_statement(line):
     """True when TYPED_DECL matched a call site, not a declaration.
 
     `throw makeError(x);`, `case handle(x):` and every other statement this
-    guards against ends in `;` or `:` once a trailing `//` comment is gone --
-    a declaration's line instead ends in `{` (`int f() {`) or in the closing
-    `)` of an Allman-style header whose brace sits on the next line.
+    guards against ends in `;` or `:` once a trailing comment is gone -- a
+    declaration's line instead ends in `{` (`int f() {`) or in the closing
+    `)` of an Allman-style header whose brace sits on the next line. A `/*`
+    with no matching `*/` on this line opens a comment that runs past it,
+    hiding text we cannot see; guessing at what that text is risks the same
+    false positive this check exists to reject, so the unresolved case is
+    treated as a statement -- the safe side of the guess, since the cost of
+    wrongly discarding a declaration's comment is lower than the cost of
+    misattributing one to a call site's name.
     """
+    open_at = line.rfind("/*")
+    if open_at != -1:
+        close_at = line.find("*/", open_at + 2)
+        if close_at == -1:
+            return True
+        line = line[:open_at] + line[close_at + 2:]
     code = line.split("//", 1)[0].rstrip()
     return code.endswith((";", ":"))
 
