@@ -89,18 +89,23 @@ BRACE_EXT = frozenset({
 })
 
 
-# A comment matching any of these is never classified as noise. The list is
-# the whole false-positive budget: Steidl (ICPC 2013) measured licence headers
-# at 18-49% of comment volume and Pascarella (MSR 2017) put metadata, task and
-# directive lines at 59% of comment LINES, so without this pass the metric
-# reports copyright.
-_IMMUNE_PATTERNS = (
+# Two jobs, two functions: Directives say "this is metadata or tooling, not source
+# code" and must gate every detector. Prose says "a human wrote informative text"
+# and must gate only prose detectors. A `# return None` is a return statement, not
+# documentation of null semantics — directives protect it, prose patterns do not.
+_DIRECTIVE_PATTERNS = (
     r"\bnoqa\b|\btype:\s*ignore|\beslint-disable|\bpylint\b|\bpyright\b"
     r"|\bnosec\b|\bfmt:\s*(on|off)|\bisort:|\bNOSONAR\b|\bgo:generate\b"
     r"|\bruff:\s|\bmypy:",
     r"\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b",
     r"\bcopyright\b|\blicen[sc]e\b|(?-i:\bSPDX\b)",
     r"#\d+|(?-i:\b[A-Z]{2,}-\d+\b)|https?://",
+    r"^#?!/|-\*-\s*coding",
+)
+_DIRECTIVE_RE = re.compile("|".join("(?:%s)" % p for p in _DIRECTIVE_PATTERNS),
+                           re.IGNORECASE | re.MULTILINE)
+
+_PROSE_PATTERNS = (
     r"\bbecause\b|\bworkaround\b|\botherwise\b"
     r"|\bиначе\b|\bпотому что\b|\bпоэтому\b",
     r"\bms\b|\bmsec\b|\bsec\b|\bbytes?\b|\bUTC\b|\bepoch\b"
@@ -108,8 +113,12 @@ _IMMUNE_PATTERNS = (
     r"\binclusive\b|\bexclusive\b|\bвключительно\b",
     r"\bnull\b|(?-i:\bNone\b)|\bnil\b|\bundefined\b",
     r"\bcaller must\b|\bowns\b|\bfrees\b|\breleases\b|\bосвобожда",
-    r"^#?!/|-\*-\s*coding",
 )
+_PROSE_RE = re.compile("|".join("(?:%s)" % p for p in _PROSE_PATTERNS),
+                       re.IGNORECASE | re.MULTILINE)
+
+# For backward compatibility, keep the combined regex (used by is_immune)
+_IMMUNE_PATTERNS = _DIRECTIVE_PATTERNS + _PROSE_PATTERNS
 _IMMUNE_RE = re.compile("|".join("(?:%s)" % p for p in _IMMUNE_PATTERNS),
                         re.IGNORECASE | re.MULTILINE)
 
@@ -136,15 +145,26 @@ def words_of(text):
     return [w.lower() for w in _WORD_RE.findall(text)]
 
 
-def is_immune(text):
+def is_directive(text):
+    """True when the comment is a tool directive, task tag, or metadata declaration."""
+    return bool(_DIRECTIVE_RE.search(text))
+
+
+def is_prose_immune(text):
+    """True when the comment is long-form prose or documents informative values."""
     if len(words_of(text)) >= LONG_COMMENT_WORDS:
         return True
-    return bool(_IMMUNE_RE.search(text))
+    return bool(_PROSE_RE.search(text))
+
+
+def is_immune(text):
+    """True when the comment must not be classified as noise (directives or prose)."""
+    return is_directive(text) or is_prose_immune(text)
 
 
 def is_commented_out(text):
     """True when the comment body parses or reads as Python source."""
-    if is_immune(text):
+    if is_directive(text):
         return False
     return any(_line_is_code(line) for line in text.splitlines())
 
