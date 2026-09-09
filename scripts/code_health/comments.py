@@ -171,7 +171,39 @@ def is_commented_out(text):
     """True when the comment body parses or reads as Python source."""
     if is_directive(text):
         return False
-    return any(_line_is_code(line) for line in text.splitlines())
+    lines = text.splitlines()
+    non_empty_lines = [line for line in lines if line.strip()]
+    if not non_empty_lines:
+        return False
+    # A comment is code when more than half its non-empty lines read as code.
+    # A fifteen-line prose docstring with one worked example containing `else:`
+    # should not be flagged as commented-out code by a single structural match.
+    code_looking = sum(1 for line in non_empty_lines if _line_is_code(line))
+    return code_looking > len(non_empty_lines) / 2
+
+
+def _is_bare_expr_without_call(line):
+    """True if the line is a bare expression with no function calls.
+
+    Prose like "C/Java/C# typed form" parses as valid Python (a binary
+    expression), but is documentation, not commented-out code. A bare
+    expression with no calls is likely prose that happened to parse.
+    """
+    try:
+        tree = ast.parse(line, mode='exec')
+    except (SyntaxError, ValueError):
+        return False
+
+    # Single expression statement with no calls is likely prose
+    if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
+        expr = tree.body[0].value
+        # Check if there are any Call nodes anywhere in the expression
+        for node in ast.walk(expr):
+            if isinstance(node, ast.Call):
+                return False  # Has calls, so it's likely code
+        return True  # No calls found, so it's likely prose
+
+    return False  # Not a single bare expression
 
 
 def _line_is_code(line):
@@ -193,6 +225,11 @@ def _line_is_code(line):
         # processing pathological input like a 50k-character unary operator run.
         # Catching it prevents a single malformed comment from crashing the audit.
         return False
+
+    # Bare expressions without calls are prose, not code.
+    if _is_bare_expr_without_call(line):
+        return False
+
     return True
 
 

@@ -191,6 +191,39 @@ class CommentedOutTests(unittest.TestCase):
         """
         self.assertFalse(CM.is_commented_out("TODO: x = 1"))
 
+    def test_docstring_with_code_example_is_not_flagged(self):
+        """Prose with one code-like line is still prose by majority rule.
+
+        A fifteen-line prose docstring with one `else:` from a worked example
+        should not be flagged as commented-out code. Majority rule: > half of
+        non-empty lines must read as code.
+        """
+        docstring = """Evaluate each branch as a logical expression. A null guard
+and a type narrower are both tests of the argument value; if the value
+is not null, we step into the first branch; if it is, we step into the
+`elif` branch; if both tests fail, we step into the `else:` branch.
+Pseudo-code:
+
+  if arg is not None:
+    print("first")
+  elif arg is str:
+    print("second")
+  else:
+    print("third")
+
+When stacked this way, each branch counts as one nesting level."""
+        self.assertFalse(CM.is_commented_out(docstring))
+
+    def test_bare_expression_without_call_is_not_flagged(self):
+        """Prose that parses is not code if it lacks function calls.
+
+        Text like "C/Java/C# typed form" parses as valid Python (a binary
+        expression C/Java slash C# slash form), but is documentation. Bare
+        expressions without calls are prose, not commented-out code.
+        """
+        prose_that_parses = "C/Java/C# typed form (, )."
+        self.assertFalse(CM.is_commented_out(prose_that_parses))
+
 
 class CoherenceTests(unittest.TestCase):
     def test_identifier_splits_on_camel_and_snake(self):
@@ -553,3 +586,4 @@ class LayerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
