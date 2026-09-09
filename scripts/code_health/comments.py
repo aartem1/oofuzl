@@ -14,6 +14,7 @@ repository's comment volume; without the pass this module measures copyright.
 
 import ast
 import io
+import re
 import tokenize
 from collections import namedtuple
 
@@ -86,6 +87,48 @@ BRACE_EXT = frozenset({
     ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
     ".go", ".kt", ".rs", ".swift", ".scala", ".m", ".mm",
 })
+
+
+# A comment matching any of these is never classified as noise. The list is
+# the whole false-positive budget: Steidl (ICPC 2013) measured licence headers
+# at 18-49% of comment volume and Pascarella (MSR 2017) put metadata, task and
+# directive lines at 59% of comment LINES, so without this pass the metric
+# reports copyright.
+_IMMUNE_PATTERNS = (
+    r"\bnoqa\b|\btype:\s*ignore|\beslint-disable|\bpylint\b|\bpyright\b"
+    r"|\bnosec\b|\bfmt:\s*(on|off)|\bisort:|\bNOSONAR\b|\bgo:generate\b"
+    r"|\bruff:\s|\bmypy:",
+    r"\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b",
+    r"\bcopyright\b|\blicen[sc]e\b|\bSPDX\b",
+    r"#\d+|\b[A-Z]{2,}-\d+\b|https?://",
+    r"\bbecause\b|\bworkaround\b|\botherwise\b"
+    r"|\bиначе\b|\bпотому что\b|\bпоэтому\b",
+    r"\bms\b|\bmsec\b|\bsec\b|\bbytes?\b|\bUTC\b|\bepoch\b"
+    r"|\b[01]-based\b|\bpx\b|\bhz\b",
+    r"\binclusive\b|\bexclusive\b|\bвключительно\b",
+    r"\bnull\b|\bNone\b|\bnil\b|\bundefined\b|\bempty\b",
+    r"\bcaller must\b|\bowns\b|\bfrees\b|\bcloses\b|\breleases\b|освобожда",
+    r"^#!|-\*-\s*coding",
+)
+_IMMUNE_RE = re.compile("|".join("(?:%s)" % p for p in _IMMUNE_PATTERNS),
+                        re.IGNORECASE | re.MULTILINE)
+
+# Steidl's second validated length rule: developers kept the comment in 10 of
+# 10 examples at this length, with >=88% agreement in nine of them.
+LONG_COMMENT_WORDS = 30
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def words_of(text):
+    """Alphabetic words of a comment, lowercased, after marker normalisation."""
+    return [w.lower() for w in _WORD_RE.findall(text)]
+
+
+def is_immune(text):
+    if len(words_of(text)) >= LONG_COMMENT_WORDS:
+        return True
+    return bool(_IMMUNE_RE.search(text))
 
 
 def extract(text, ext):

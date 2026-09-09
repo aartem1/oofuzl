@@ -85,5 +85,43 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(len(CM.extract("// x\n", ".ts")), 1)
 
 
+class ImmunityTests(unittest.TestCase):
+    IMMUNE = [
+        "noqa: E501",
+        "type: ignore[arg-type]",
+        "eslint-disable-next-line no-console",
+        "TODO: drop after RAM-436",
+        "FIXME later",
+        "Copyright 2026 Acme",
+        "SPDX-License-Identifier: MIT",
+        "see #1234 for the original report",
+        "see https://bugs.example/1 for why",
+        "ms, not seconds",
+        "end is exclusive",
+        "returns None when the cache is cold",
+        "the caller owns the handle and must close it",
+        "workaround for a driver bug",
+        "иначе счётчик сбрасывается на втором проходе",
+        "-*- coding: utf-8 -*-",
+        " ".join(["word"] * 30),
+    ]
+    NOT_IMMUNE = [
+        "increment counter",
+        "loop through the items",
+        "removes all defined markers",
+        "set x to 1",
+    ]
+
+    def test_immune_texts(self):
+        for text in self.IMMUNE:
+            with self.subTest(text=text):
+                self.assertTrue(CM.is_immune(text))
+
+    def test_not_immune_texts(self):
+        for text in self.NOT_IMMUNE:
+            with self.subTest(text=text):
+                self.assertFalse(CM.is_immune(text))
+
+
 if __name__ == "__main__":
     unittest.main()
