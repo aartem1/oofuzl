@@ -430,11 +430,11 @@ issue keys.
 **`commented_out` (Python only) is a majority rule, not "any line."** More than half of a
 comment's non-empty lines must read as code — the earlier any-line rule flagged a fifteen-line
 prose docstring in this plugin's own `pyast.py` as commented-out code, because the docstring's one
-worked example contains `else:`. The pipeline's last step, ported from eradicate, is a real
-`compile()`; a successful compile is now also rejected when the parsed result is a single bare
-expression containing no call, because a `#` inside comment text truncates the line handed to
-`compile` — this plugin's own comment ending `C/Java/C# typed form (…)` compiled as the valid
-expression `C/Java/C`. Accepted cost: genuinely commented-out code shaped `x[1]` or `x % y` is now
+worked example contains `else:`. The pipeline's last step, ported from eradicate, is a real parse
+— `ast.parse`, not `compile`, which is what the module calls; a successful parse is now also
+rejected when the result is a single bare expression containing no call, because a `#` inside
+comment text truncates the line handed to the parser — this plugin's own comment ending
+`C/Java/C# typed form (…)` parsed as the valid expression `C/Java/C`. Accepted cost: genuinely commented-out code shaped `x[1]` or `x % y` is now
 missed too. Steidl's published `0.1` figure is not used anywhere in this module: it was tuned as
 one input feature to a trained classifier in the source paper, not validated as a standalone
 decision rule, and reusing it here would publish a number this repository never checked itself.

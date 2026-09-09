@@ -108,7 +108,17 @@ class DispatchTests(unittest.TestCase):
 
 
 class ImmunityTests(unittest.TestCase):
-    IMMUNE = [
+    """The two immunity passes, pinned apart.
+
+    `is_immune` -- the union of both -- had no production caller and has been
+    retired; asserting through it hid which half each text belongs to, which
+    is the whole point of the split Task 4 made. `is_directive` gates every
+    detector including `commented_out`; `is_prose_immune` gates only the prose
+    detectors, so a commented-out `# return None` is a return statement rather
+    than documentation of null semantics.
+    """
+
+    DIRECTIVE = [
         "noqa: E501",
         "type: ignore[arg-type]",
         "eslint-disable-next-line no-console",
@@ -119,14 +129,16 @@ class ImmunityTests(unittest.TestCase):
         "see #1234 for the original report",
         "see https://bugs.example/1 for why",
         "see RAM-436",
+        "-*- coding: utf-8 -*-",
+        "!/usr/bin/env python3",
+    ]
+    PROSE = [
         "ms, not seconds",
         "end is exclusive",
         "returns None when the cache is cold",
         "the caller owns the handle and must close it",
         "workaround for a driver bug",
         "иначе счётчик сбрасывается на втором проходе",
-        "-*- coding: utf-8 -*-",
-        "!/usr/bin/env python3",
         " ".join(["word"] * 30),
     ]
     NOT_IMMUNE = [
@@ -141,15 +153,36 @@ class ImmunityTests(unittest.TestCase):
         " ".join(["word"] * 29),
     ]
 
-    def test_immune_texts(self):
-        for text in self.IMMUNE:
+    def test_directive_texts_are_directives(self):
+        for text in self.DIRECTIVE:
             with self.subTest(text=text):
-                self.assertTrue(CM.is_immune(text))
+                self.assertTrue(CM.is_directive(text))
 
-    def test_not_immune_texts(self):
+    def test_prose_texts_are_prose_immune(self):
+        for text in self.PROSE:
+            with self.subTest(text=text):
+                self.assertTrue(CM.is_prose_immune(text))
+
+    def test_prose_immunity_does_not_leak_into_the_directive_half(self):
+        """The split only bites if the two lists are actually disjoint.
+
+        A prose text matching `is_directive` would still gate
+        `commented_out`, which is exactly what the split exists to prevent.
+        """
+        for text in self.PROSE:
+            with self.subTest(text=text):
+                self.assertFalse(CM.is_directive(text))
+
+    def test_not_immune_texts_match_neither_pass(self):
         for text in self.NOT_IMMUNE:
             with self.subTest(text=text):
-                self.assertFalse(CM.is_immune(text))
+                self.assertFalse(CM.is_directive(text))
+                self.assertFalse(CM.is_prose_immune(text))
+
+    def test_the_union_helper_is_gone(self):
+        # `is_immune` had no production caller; only its own tests used it,
+        # so it pinned nothing that `classify_file` actually runs.
+        self.assertFalse(hasattr(CM, "is_immune"))
 
 
 class CommentedOutTests(unittest.TestCase):

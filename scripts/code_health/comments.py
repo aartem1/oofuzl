@@ -1,15 +1,22 @@
 """Comments that carry no information beyond the code next to them.
 
 Three detectors, two of which count toward the metric. `commented_out` ports
-eradicate's algorithm and ends in a real `compile()`; `trivial_doc` ports
+eradicate's algorithm and ends in a real `ast.parse`; `trivial_doc` ports
 Steidl's coherence coefficient (ICPC 2013), whose 0.5 threshold was validated
 by a 16-developer survey. `short_inline` is measured at 0.70 precision and is
 therefore reported in evidence only -- summing three classes would give the
 whole metric the precision of its weakest member.
 
-An immunity pass runs before every detector. Steidl and Pascarella independently
-measured that licence headers, task tags and tool directives make up most of a
-repository's comment volume; without the pass this module measures copyright.
+Two immunity passes, not one, because they protect different things.
+`is_directive` -- tool directives, task tags, licence text, issue references
+and URLs, shebang and coding declarations -- gates EVERY detector,
+`commented_out` included. `is_prose_immune` -- the 30-word rule, reason words,
+units, range bounds, null-value wording and ownership verbs -- gates only the
+prose detectors, because commented-out code is code: `# return None` is a
+return statement, not documentation of null semantics, and only the directive
+half may excuse it. Steidl and Pascarella independently measured that licence
+headers, task tags and tool directives make up most of a repository's comment
+volume; without the directive pass this module measures copyright.
 """
 
 import ast
@@ -176,9 +183,12 @@ SHORT_INLINE_WORDS = 2
 
 COUNTED_CLASSES = ("commented_out", "trivial_doc")
 
-# eradicate v3.0.1's pipeline. The final step is a real parse, which is why
-# this class is the most accurate of the three (P 0.89 / R 0.95, Steidl 2013);
-# everything above it exists to stop prose from ever reaching `compile`.
+# eradicate v3.0.1's pipeline. The final step is a real `ast.parse`, which is
+# why this class is the most accurate of the three; everything above it exists
+# to stop prose from ever reaching the parser. The 0.89/0.95 figures Steidl
+# reports are that paper's, for its own algorithm -- see
+# `references/metrics.md`, "Where `comment_noise`'s precision figures come
+# from", for what this implementation actually measured.
 _CODE_INDICATORS = ("(", ")", "[", "]", "{", "}", ":", "=", "%")
 _CODE_WORDS = ("print", "return", "break", "continue", "import", "pass", "raise")
 _MULTILINE_ASSIGN = re.compile(r"^\s*\w+\s*=.*[(\[{]$")
@@ -211,11 +221,6 @@ def is_prose_immune(text):
     if len(words_of(text)) >= LONG_COMMENT_WORDS:
         return True
     return bool(_PROSE_RE.search(text))
-
-
-def is_immune(text):
-    """True when the comment must not be classified as noise (directives or prose)."""
-    return is_directive(text) or is_prose_immune(text)
 
 
 def is_commented_out(text):
