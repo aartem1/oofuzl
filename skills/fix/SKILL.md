@@ -199,6 +199,14 @@ uncommitted, the item is marked `failed`, and the cycle stops (step 3, item 7).
 5. The repo-wide `summary` (step 2's `queue.baseline_summary`) did not improve consistently with the
    local metric this group targeted — a sign the problem moved somewhere the measurer no longer
    looks, rather than actually shrinking.
+6. For a `comment_noise` group, comment lines the diff deletes outside `evidence.commented_out.lines`
+   and `evidence.trivial_doc.lines` combined — the finding's exact line numbers for its two counted
+   classes. Anything outside that union is a comment the detector judged worth keeping, and deleting
+   it is how this metric is gamed: fewer comment lines lowers `file_lines` and `file_tokens`, so rule
+   5's repo-wide comparison reads the deletion as an improvement and confirms it instead of catching
+   it. `evidence.short_inline.lines` stays outside the protected set — that class is evidence-only,
+   never counted into `noise_comment_lines`, so deleting one of those lines is not gaming, though it
+   earns no credit either.
 
 **The false-positive exception, restored from v0.2.0.** Rule 3 is not absolute. A suppression is
 permitted when the finding is demonstrably a false positive *and* the user explicitly approves it

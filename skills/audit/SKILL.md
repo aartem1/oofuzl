@@ -190,7 +190,19 @@ for priority and grouping judgment, plus this mapping (DESIGN §8):
 | `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
 | `dead_symbol` | the owning module/package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
 | Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
+| `comment_noise` | subsystem/directory | "31 files carrying commented-out code under `legacy/`" — capped at `P2` |
 | `hotspot`, `edit_fanout`, `symbol_collision` | **never their own group** | they re-rank the groups above and appear as evidence inside that group's `why` |
+
+A `comment_noise` finding's `evidence.zero_coherence` lists comments that share
+no word with the function they document. That is not a finding of its own and
+never becomes a group. When such a function also carries a
+`function_too_complex`, `function_too_long` or `too_deep_nesting` finding, name
+the comment in that group's `why` as evidence: the code needed prose to be
+understood, which is the group's own argument. When the function carries no
+other finding, ignore the entry. This is the same rule already in force for
+`hotspot`, `edit_fanout` and `symbol_collision`: a group made only of
+re-ranking findings is forbidden (`<plugin-root>/references/ledger.md`,
+"Re-ranking findings").
 
 **Parameter-set clustering** for `too_many_params`: `measure.py`'s Python `ast` pass emits each
 function's ordered parameter-name tuple; group functions by Jaccard ≥ 0.6 over their parameter-name
