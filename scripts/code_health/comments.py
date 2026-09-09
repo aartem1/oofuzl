@@ -117,11 +117,6 @@ _PROSE_PATTERNS = (
 _PROSE_RE = re.compile("|".join("(?:%s)" % p for p in _PROSE_PATTERNS),
                        re.IGNORECASE | re.MULTILINE)
 
-# For backward compatibility, keep the combined regex (used by is_immune)
-_IMMUNE_PATTERNS = _DIRECTIVE_PATTERNS + _PROSE_PATTERNS
-_IMMUNE_RE = re.compile("|".join("(?:%s)" % p for p in _IMMUNE_PATTERNS),
-                        re.IGNORECASE | re.MULTILINE)
-
 # Steidl's second validated length rule: developers kept the comment in 10 of
 # 10 examples at this length, with >=88% agreement in nine of them.
 LONG_COMMENT_WORDS = 30
@@ -183,7 +178,10 @@ def _line_is_code(line):
         return True
     try:
         compile(line, "<comment>", "exec")
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # MemoryError: CPython's parser raises this on stack overflow when
+        # processing pathological input like a 50k-character unary operator run.
+        # Catching it prevents a single malformed comment from crashing the audit.
         return False
     return True
 

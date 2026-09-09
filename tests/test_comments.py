@@ -162,6 +162,13 @@ class CommentedOutTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(CM.is_commented_out(text))
 
+    def test_pathological_input_does_not_raise(self):
+        # CPython's parser raises MemoryError on stack overflow from a long
+        # unary-operator run. The detector must catch it, not crash the audit.
+        pathological = "-" * 50000 + "1"
+        result = CM.is_commented_out(pathological)
+        self.assertFalse(result)
+
 
 if __name__ == "__main__":
     unittest.main()
