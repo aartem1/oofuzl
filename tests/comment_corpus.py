@@ -116,16 +116,14 @@ CORPUS = [
     # A Cyrillic comment that must be immune via the reason-word pattern
     # (`\bиначе\b`).
     ("# трогать нельзя, иначе всё сломается\nx = 1\n", ".py", "clean"),
-    # A Cyrillic comment restating a Latin identifier's words is not
-    # constructible: `coherence` compares words with `_within_one_edit`,
-    # a character-by-character comparison, and a Cyrillic word can never be
-    # within one edit of a Latin one -- the scripts share no characters. So
-    # this row instead documents the real behaviour: placed next to a
-    # declaration, the comment's words score coherence 0.0 against it
-    # (verified: `coherence("кэш недействителен после перезапуска",
-    # "invalidate_cache") == 0.0`), landing in zero_coherence, not
-    # trivial_doc -- a Cyrillic comment can never trigger trivial_doc against
-    # a Latin identifier under this scoring, only ever zero_coherence or clean.
+    # A Cyrillic comment that restates a Latin identifier's words, in the
+    # sense trivial_doc requires, is not attempted here -- this row instead
+    # documents what actually happens when one sits next to a Latin
+    # declaration. `invalidate_cache` splits into `invalidate` and `cache`,
+    # both multi-character, and no word below reaches either within one
+    # edit (verified: `coherence("кэш недействителен после перезапуска",
+    # "invalidate_cache") == 0.0`), so it lands in zero_coherence, not
+    # trivial_doc.
     ("# кэш недействителен после перезапуска\n"
      "def invalidate_cache():\n    pass\n", ".py", "clean"),
 

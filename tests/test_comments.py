@@ -217,6 +217,15 @@ class CoherenceTests(unittest.TestCase):
     def test_three_edits_apart_do_not_match(self):
         self.assertAlmostEqual(CM.coherence("marker", "mask"), 0.0)
 
+    def test_single_character_strings_never_match_unless_identical(self):
+        """At length one the edit-distance rule is vacuous: any two distinct
+        single characters sit at Levenshtein distance 1, so without a floor
+        `_within_one_edit` would match any letter to any other -- including
+        a Cyrillic character against an unrelated Latin one.
+        """
+        self.assertFalse(CM._within_one_edit("и", "a"))
+        self.assertTrue(CM._within_one_edit("и", "и"))
+
     def test_comment_with_no_words_returns_none(self):
         self.assertIsNone(CM.coherence("-----", "anything"))
 

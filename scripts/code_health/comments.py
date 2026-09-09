@@ -288,6 +288,10 @@ def _within_one_edit(a, b):
     """Levenshtein distance below 2, without building the DP table."""
     if a == b:
         return True
+    # Below length 2 every distinct pair sits at edit distance 1 (e.g. "и"
+    # vs "a"), so an unfloored rule would match any letter to any other.
+    if len(a) < 2 or len(b) < 2:
+        return False
     if abs(len(a) - len(b)) > 1:
         return False
     if len(a) > len(b):
