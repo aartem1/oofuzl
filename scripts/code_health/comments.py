@@ -216,22 +216,64 @@ def _is_bare_expr_without_call(tree):
     return False  # Not a single bare expression
 
 
-def _is_prose_annotation(tree):
-    """True if the line is a valueless annotation whose annotation is a bare constant.
+# A bare Name is a real annotation only for a builtin or typing type -- this
+# is what tells `x: int` (code) apart from `Казахстан: Астана` (a real
+# false positive, xhh/utils/employerview_meta_tags.py: a Country:Capital
+# label comment, valid syntax only because Cyrillic identifiers are legal
+# Python 3 names). The list is Python's own vocabulary for this position,
+# not a fact about any repository this module has been run against.
+_ANNOTATION_TYPE_NAMES = frozenset({
+    "str", "int", "float", "bool", "bytes", "bytearray", "complex",
+    "list", "dict", "set", "frozenset", "tuple", "object", "type", "None",
+    "Any", "Optional", "Union", "Literal", "Callable", "Iterable",
+    "Sequence", "Mapping",
+})
 
-    `Format: "MemAvailable:   1234567 kB"` (real comment, a /proc/meminfo
-    parser) parses as an ast.AnnAssign with no value and a string Constant
-    annotation -- prose with a colon, not code. `clusters: dict[str, Any]`
-    (real deprecated annotation, xhh) is also a valueless AnnAssign, but its
-    annotation is a Subscript -- a type expression -- and IS commented-out
-    code. The discriminator is the annotation node's shape, not whether a
-    value is present.
+
+def _is_type_expression(node):
+    """True when `node` has a shape only a real type annotation uses.
+
+    `dict[str, Any]` is a Subscript, `typing.Optional[Config]` an Attribute
+    (dotted name) feeding a Subscript, `int | None` a BinOp/BitOr of two type
+    expressions -- all three are commented-out code when found as a valueless
+    annotation. A bare Name is trusted only against `_ANNOTATION_TYPE_NAMES`;
+    anything else in this position -- a Compare, a Call, an arbitrary Name --
+    is not Python's type-annotation grammar and is prose that happened to
+    parse, however code-shaped its colon makes it look.
+    """
+    if isinstance(node, (ast.Subscript, ast.Attribute)):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in _ANNOTATION_TYPE_NAMES
+    if isinstance(node, ast.Constant):
+        # `x: None` is the one bare-Constant annotation that is real code;
+        # every other Constant (str, int, ...) is Fix 3's original case --
+        # `Format: "MemAvailable:   1234567 kB"` (real comment, a /proc/meminfo
+        # parser) -- kept rejected because a string annotation is a forward
+        # reference indistinguishable from prose here, and prose is the
+        # commoner case in a comment.
+        return node.value is None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _is_type_expression(node.left) and _is_type_expression(node.right)
+    return False
+
+
+def _is_prose_annotation(tree):
+    """True if the line is a valueless annotation whose annotation is not a type expression.
+
+    `clusters: dict[str, Any]` (real deprecated annotation, xhh) is a
+    valueless AnnAssign whose annotation is a Subscript -- a type expression
+    -- and IS commented-out code. `Казахстан:Астана` (real false positive,
+    xhh) is the same AnnAssign shape with a bare Name that is not a known
+    type. The discriminator is the annotation node's shape against Python's
+    own type-annotation grammar, not whether a value is present.
     """
     if len(tree.body) != 1:
         return False
     stmt = tree.body[0]
-    return (isinstance(stmt, ast.AnnAssign) and stmt.value is None
-            and isinstance(stmt.annotation, ast.Constant))
+    if not (isinstance(stmt, ast.AnnAssign) and stmt.value is None):
+        return False
+    return not _is_type_expression(stmt.annotation)
 
 
 def _has_call_with_space_before_parenthesis(tree, line):

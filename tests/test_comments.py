@@ -151,6 +151,13 @@ class CommentedOutTests(unittest.TestCase):
         "clusters: dict[str, Any]",
         # Real commented-out call, xhh (Fix 4): no whitespace before the "(".
         "put_oauth_error_state(self, HTTPStatus.FORBIDDEN)",
+        # Fix 3 round 2: every type-expression shape the annotation
+        # discriminator must accept.
+        "x: int",
+        'name: str = "a"',
+        "items: list[int]",
+        "cfg: typing.Optional[Config]",
+        "value: int | None",
     ]
     # Every entry is an open ruff ERA001 false-positive report.
     NOT_CODE = [
@@ -176,6 +183,13 @@ class CommentedOutTests(unittest.TestCase):
         "x",
         "the parser",
         "C/Java/C# typed form (, ).",
+        # Country:Capital label comment, real text, xhh/utils/
+        # employerview_meta_tags.py (Fix 3 round 2): a bare Name annotation
+        # only reads as a type when the name is a known builtin/typing type;
+        # Cyrillic identifiers are legal Python 3 names but not types.
+        "Казахстан:Астана",
+        "Note: see the ticket",
+        "Warning: this is slow",
     ]
 
     def test_code_is_detected(self):

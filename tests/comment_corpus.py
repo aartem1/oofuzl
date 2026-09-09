@@ -172,14 +172,25 @@ CORPUS = [
     ('BRAND = (214, 0, 28)  # #D6001C — HH brand red (service.hh), primary accent\n',
      ".py", "clean"),
 
-    # Fix 3: a valueless annotation whose annotation is a bare Constant is
-    # prose, not code. `Format: "MemAvailable:   1234567 kB"` (a /proc/meminfo
-    # parser's field-format note) parses as ast.AnnAssign with a string
-    # Constant annotation and must stay clean; `clusters: dict[str, Any]` (a
-    # real deprecated annotation found in xhh) parses the same shape with a
-    # Subscript annotation and IS commented-out code.
+    # Fix 3: a valueless annotation is code only when its annotation has the
+    # shape Python's own grammar uses for a type -- Subscript, Attribute, a
+    # BitOr of two type expressions, a bare Constant `None`, or a bare Name
+    # against a small builtin/typing allow-list. `Format: "MemAvailable:
+    # 1234567 kB"` (a /proc/meminfo parser's field-format note) parses as
+    # ast.AnnAssign with a string Constant annotation and must stay clean;
+    # `clusters: dict[str, Any]` (a real deprecated annotation found in xhh)
+    # parses the same shape with a Subscript annotation and IS commented-out
+    # code.
     ('# Format: "MemAvailable:   1234567 kB"\nx = 1\n', ".py", "clean"),
     ("# clusters: dict[str, Any]\nx = 1\n", ".py", "commented_out"),
+    # Round 2: a bare Name annotation is code only against the type
+    # allow-list -- pinned from the code side (`x: int`, a builtin type) and
+    # the false-positive side (`Казахстан:Астана`, verbatim from
+    # xhh/utils/employerview_meta_tags.py: a Country:Capital label comment
+    # documenting a domain-area-id lookup table's key/value pair, valid
+    # syntax only because Cyrillic identifiers are legal Python 3 names).
+    ("# x: int\ny = 1\n", ".py", "commented_out"),
+    ("# Казахстан:Астана\ny = 1\n", ".py", "clean"),
 
     # Fix 4: a call with whitespace before its parenthesis is prose, not
     # code. `lower_is_better (default)` (a metrics-direction note) parses as
