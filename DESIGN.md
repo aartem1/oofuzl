@@ -370,7 +370,10 @@ This is the pass that catches what CPD misses.
 
 The headline number reported to the user is the **lexical** similarity, comparable to the "64–75 %
 pairwise" figure that motivated this pass. Known limitation, stated in the report: comments are not
-stripped, so heavily commented near-identical code scores lower than its logic warrants.
+stripped, so heavily commented near-identical code scores lower than its logic warrants. A comment
+reader now exists in this repository (`scripts/code_health/comments.py`, §5) that could strip them
+before tokenizing; noted here as a possibility, not implemented — this pass still tokenizes raw
+source, comments included.
 
 ### L2 — import graph
 
@@ -398,6 +401,77 @@ fixed for vulture: a confident "no dead code in JS/TS" produced by parsing nothi
 verified parser here for knip's JSON reporter, so the layer reports `not_measured` with that as the
 reason and knip is not run at all, rather than paying a 900-second subprocess for a result nobody
 reads. Shipping an unverified parser would restore the same claim one level down.
+
+### L2 — comments
+
+Own reader, no external tool: `scripts/code_health/comments.py`. Three detectors —
+`commented_out`, `trivial_doc`, `short_inline` — feed one metric, `noise_comment_lines`; only the
+first two are summed into it. Folding `short_inline` in as well would give the whole metric the
+precision of its weakest class, the same reason CCN and cognitive complexity are reported under
+separate names rather than blended into one number.
+
+**Two immunity passes, not one.** `is_directive` covers eradicate's own whitelist — tool directives
+(`noqa`, `type: ignore`, `eslint-disable`, `pylint`, `pyright`, `nosec`, `fmt:`, `isort:`,
+`NOSONAR`, `go:generate`, `ruff:`, `mypy:`), task tags (`TODO`/`FIXME`/`XXX`/`HACK`),
+licence/copyright text, issue references and URLs, shebang and coding declarations — and gates
+every detector, `commented_out` included. `is_prose_immune` covers the 30-word rule, reason words
+(`because`/`workaround`/`otherwise` and their Russian equivalents), units and epoch/index
+conventions, range-bound wording, null-value wording, and ownership/lifetime verbs — and gates only
+the two prose detectors (`trivial_doc`, `short_inline`). The split exists because a commented-out
+`# return None` was being spared by the null-value pattern under one combined list: commented-out
+code is code, not documentation of null semantics, and only the directive list may excuse it.
+`empty` and `closes` were dropped from the ownership/lifetime wording — both are ordinary verbs
+that appear in exactly the restating comments this metric targets ("empty the cache", "closes the
+file" over `f.close()`), not markers of genuine ownership documentation. Three of the directive
+alternatives — the issue-key pattern, `None`, `SPDX` — are matched case-sensitively inside an
+otherwise case-insensitive pass, because case-insensitively they matched `utf-8` and `python-3` as
+issue keys.
+
+**`commented_out` (Python only) is a majority rule, not "any line."** More than half of a
+comment's non-empty lines must read as code — the earlier any-line rule flagged a fifteen-line
+prose docstring in this plugin's own `pyast.py` as commented-out code, because the docstring's one
+worked example contains `else:`. The pipeline's last step, ported from eradicate, is a real
+`compile()`; a successful compile is now also rejected when the parsed result is a single bare
+expression containing no call, because a `#` inside comment text truncates the line handed to
+`compile` — this plugin's own comment ending `C/Java/C# typed form (…)` compiled as the valid
+expression `C/Java/C`. Accepted cost: genuinely commented-out code shaped `x[1]` or `x % y` is now
+missed too. Steidl's published `0.1` figure is not used anywhere in this module: it was tuned as
+one input feature to a trained classifier in the source paper, not validated as a standalone
+decision rule, and reusing it here would publish a number this repository never checked itself.
+
+**`trivial_doc`'s inexact word match requires both words to be at least two characters.** Below
+that length every distinct character pair sits one edit apart, so `coherence("и а к", "a_b_c")`
+scored a perfect `1.0` before the floor was added. Exact equality still matches at any length.
+
+**Languages.** `commented_out` is Python-only — a brace-language verdict needs its own verified
+parser, the same precedent as `symbol_collision` and `dead_symbol` above. For a brace language its
+evidence field is `null`, never an empty list: an empty list would read as "checked, found
+nothing" for a class nobody checked there. `trivial_doc` and `short_inline` run for Python and for
+the same brace-language declaration reader the near-duplicate pass's own scanner is built from,
+verified the same flat-vs-deep way as lizard's nesting column (`references/tools.md`).
+
+**`short_inline` is evidence-only.** Measured at ~0.70 precision, below the 0.85 floor this
+repository requires of a counted class; never summed into `noise_comment_lines` and never its own
+group, but free to report once `fix` already has the file open.
+
+**Published precision, not this repository's own corpus.** `trivial_doc` is reported at ~0.90 and
+`commented_out` at ~0.89 (Steidl et al., ICPC 2013) — the literature's validated figures;
+`trivial_doc`'s corroborated there by a 16-developer survey over 30 examples. `tests/comment_corpus.py`
+scores 1.00 precision on both counted classes, and that number is never published as a measured
+precision: it is a regression pin written alongside the detectors by their own author, over
+fixtures the same author chose because the answer was already known. The false-positive rate this
+metric actually carries on a given repository is what threshold calibration there observes, not
+what the corpus reports — the `warn`/`hard` values for `noise_comment_lines` are correspondingly
+not assigned yet, calibrated against observed figures the same way `parameters.hard` and
+`near_duplicate.min_similarity` were, rather than guessed.
+
+**What this layer does not catch.** A comment that paraphrases its code in different words —
+`// loop through items` over `for item in items:` — shares no lexical overlap with it under
+coherence and goes undetected. Catching it needs an entailment model (Louis et al., 2018), which
+this layer deliberately does not run — the same kind of stated gap as nesting for Ruby/Lua and
+dead code for JS/TS above.
+
+Grouping and priority are decided in §8 and `references/quality-policy.md`, not here.
 
 ### L2 — churn
 
@@ -592,11 +666,20 @@ actual write to the profile is announced in the report (§12).
 | `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
 | `dead_symbol` | the owning module or package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
 | Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
+| `comment_noise` | subsystem/directory | "31 files carrying commented-out code under `legacy/`" — capped at `P2` |
 | `hotspot`, `edit_fanout`, `symbol_collision` | never their own group — they **re-rank** other groups and appear as evidence in `why` | — |
 
 Sonar issues are in the table because they need a grouping rule as much as the L2 kinds do and the
 audit skill had to invent one in its absence. How a re-ranking finding is nevertheless *referenced*
 by a group — never creating one — is stated in `references/ledger.md`.
+
+A `comment_noise` finding's `evidence.zero_coherence` lists comments that share no word with the
+function they document. That is not a finding of its own and never becomes a group: when the
+function also carries a `function_too_complex`, `function_too_long`, or `too_deep_nesting` finding,
+name the comment in that group's `why` as evidence — the code needed prose to be understood, which
+is the group's own argument. When the function carries no other finding, ignore the entry. Same
+rule already in force for `hotspot`, `edit_fanout`, and `symbol_collision`: a group made only of
+re-ranking findings is forbidden (`references/ledger.md`, "Re-ranking findings").
 
 **Parameter-set clustering** for `too_many_params`, since lizard gives only a count and a
 `long_name` string: the Python `ast` pass emits each function's ordered parameter-name tuple;

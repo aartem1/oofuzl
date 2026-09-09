@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
+description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn, comment noise) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
 compatibility: Requires local shell access. lizard is installed automatically; Docker is optional and only enables the Sonar layer. Designed for Claude Code and Codex-compatible Agent Skills.
 ---
 

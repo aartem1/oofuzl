@@ -73,6 +73,7 @@ written down.
 | `near_duplicate`, `exact_clone` | `dup` |
 | `import_cycle` | `imports` |
 | `dead_symbol` | `dead` |
+| `comment_noise` | `comments` |
 | `hotspot`, `symbol_collision`, `edit_fanout` | `derived` |
 
 Pass the values for every kind in the group, comma-separated. Dependencies resolve transitively —

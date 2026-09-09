@@ -33,7 +33,8 @@ Codex reads the same repository through [`.agents/plugins/marketplace.json`](.ag
 ### `audit`
 
 - Runs local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import
-  cycles, dead code, churn) plus an optional SonarQube layer, without changing the repository.
+  cycles, dead code, churn, comment noise) plus an optional SonarQube layer, without changing the
+  repository.
 - Marks every layer that could not run as `not measured`, with a reason, instead of dropping it
   silently — a Sonar-less audit says so rather than implying a clean bill of health.
 - Writes a debt ledger, grouped and prioritized (`A1`, `A2`, …), that a `fix` session can resolve.

@@ -147,6 +147,19 @@ positives on dynamic dispatch, so a `dead_symbol` group is capped at **P2** even
 large: a static-analysis "unreferenced" verdict is evidence to inspect, not proof of the kind a P0
 or P1 verdict requires elsewhere.
 
+## Comment noise grouping
+
+Group `comment_noise` findings by subsystem/directory, never repository-wide, the same rule as
+`dead_symbol` above. The `trivial_doc` detector is measured at ~0.90 and `commented_out` at ~0.89
+(Steidl et al., ICPC 2013) — the literature's own figures, not this repository's regression corpus
+(`tests/comment_corpus.py`), which scores 1.00 on both counted classes because it is a pin written
+alongside the detectors by their own author, over fixtures the same author already knew the answer
+to; it is not a measured precision and must never be quoted as one. A `comment_noise` group is
+capped at **P2** for the same reason `dead_symbol` is: a verdict at 0.89–0.90 precision is evidence
+to inspect, not proof. The report also states what the detector cannot see — a comment that
+paraphrases the code in different words (`// loop through items` over `for item in items:`) shares
+no lexical overlap with it and needs a language model to catch, and this layer does not run one.
+
 ## The Sonar-less ceiling
 
 A Sonar-less audit can **structurally never raise a P0**. The P0 tier is defined by
