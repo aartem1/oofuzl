@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from code_health import config as C          # noqa: E402
 from code_health import churn as CH          # noqa: E402
+from code_health import comments as CM       # noqa: E402
 from code_health import derived as DV        # noqa: E402
 from code_health import discovery as D       # noqa: E402
 from code_health import dup as DUP           # noqa: E402
@@ -93,6 +94,9 @@ def build_document(args):
         layers["derived"] = DV.measure_derived(
             layers["size"], layers["churn"], layers["imports"], cfg)
         all_findings.extend(F.derived_findings(layers["derived"], cfg))
+    if "comments" in wanted:
+        layers["comments"] = CM.measure_comments(repo_root, inventory, cfg)
+        all_findings.extend(F.comment_findings(layers["comments"]))
 
     return {
         "schema": 1,

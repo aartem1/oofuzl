@@ -197,5 +197,47 @@ class CloneAndDeadFindingTests(unittest.TestCase):
         self.assertEqual(early[0]["value"], 60)
 
 
+class CommentFindingTests(unittest.TestCase):
+    """`comment_noise` is not in `config.thresholds` (no `cfg` argument),
+    the same shape as `dead_symbol`: a fixed `warn` level and `threshold:
+    None`, because the calibration run found no meaningful cut in the data."""
+
+    def test_a_row_above_zero_produces_one_warn_finding(self):
+        layer = {"files": [
+            {"path": "a.py", "noise_comment_lines": 3, "evidence": {"tokens": 5}}]}
+        out = F.comment_findings(layer)
+        self.assertEqual(len(out), 1)
+        hit = out[0]
+        self.assertEqual(hit["id"], "comment_noise:a.py")
+        self.assertEqual(hit["kind"], "comment_noise")
+        self.assertEqual(hit["level"], "warn")
+        self.assertEqual(hit["metric"], "noise_comment_lines")
+        self.assertEqual(hit["value"], 3)
+        self.assertIsNone(hit["threshold"])
+
+    def test_a_row_at_zero_produces_no_finding(self):
+        layer = {"files": [
+            {"path": "a.py", "noise_comment_lines": 0, "evidence": {"tokens": 0}}]}
+        self.assertEqual(F.comment_findings(layer), [])
+
+    def test_a_none_value_produces_no_finding_and_does_not_raise(self):
+        # `noise_comment_lines: None` means "not measured", never "zero" --
+        # the same guard `size_findings` applies before comparing.
+        layer = {"files": [
+            {"path": "a.rb", "noise_comment_lines": None, "evidence": None}]}
+        self.assertEqual(F.comment_findings(layer), [])
+
+    def test_comments_layer_uses_no_external_tool(self):
+        self.assertEqual(F.tools_for({"comments"}), [])
+
+    def test_output_is_sorted_by_id(self):
+        layer = {"files": [
+            {"path": "z.py", "noise_comment_lines": 1, "evidence": {}},
+            {"path": "a.py", "noise_comment_lines": 2, "evidence": {}}]}
+        out = F.comment_findings(layer)
+        self.assertEqual([f["id"] for f in out],
+                         ["comment_noise:a.py", "comment_noise:z.py"])
+
+
 if __name__ == "__main__":
     unittest.main()

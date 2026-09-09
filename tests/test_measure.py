@@ -46,6 +46,7 @@ RESULT_DEPS = {
     "derived": {"hotspots": ("size", "churn"),
                 "symbol_collisions": ("imports",),
                 "edit_fanout": ("churn",)},
+    "comments": {"files": ()},
 }
 
 
