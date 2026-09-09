@@ -489,9 +489,9 @@ flagged line read at its own line with its surrounding code:
 - `commented_out`: **11 flagged lines, 11 true positives** — two deprecated annotations carrying
   `@deprecated` notes, two commented-out `put_oauth_error_state(...)` calls, and one seven-line
   commented-out `check_employer_has_service(...)` block closed by a `tempexp_..._end` marker. Each
-  was read independently by two reviewers. Eleven positives is a small numerator: it supports "no
-  false positive was found in this sample", not a confident percentage, and no percentage is
-  quoted from it.
+  line was individually inspected at its source context. Eleven positives is a small numerator: it
+  supports "no false positive was found in this sample", not a confident percentage, and no
+  percentage is quoted from it.
 - `trivial_doc`: **31 flagged lines in 28 comment records.** 13 lines are unambiguous restatements
   (`"""Escape HTML entities."""` over `escape_html`, `"""Jira API error."""` over `class
   JiraAPIError`). 14 lines are the shape below, a **section header**. 4 lines are false positives —
@@ -520,7 +520,7 @@ own author, over fixtures the same author chose because the answer was already k
 
 **`noise_comment_lines` has no `warn`/`hard`, and calibration is what settled that.** The
 calibration ran over the same 15,318 files: p50, p75, p90, p95 and p99 are all `0`, with a maximum
-of 52. That is a rare-event distribution, not one with a meaningful cut — the plan's
+of 7. That is a rare-event distribution, not one with a meaningful cut — the plan's
 `warn = p90 / hard = p99` method would have set both to zero, flagging every file carrying a
 single noise line. Rather than invent a number the data does not contain, the metric sits in
 `references/metrics.md`'s "Metrics outside `config.thresholds`" table alongside `dead_symbol`, its

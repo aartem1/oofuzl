@@ -120,7 +120,7 @@ flagged line read at its own line with its surrounding code:
 
 | Class | Flagged | Judged |
 |---|---|---|
-| `commented_out` | 11 lines | 11 true positives, 0 false. Two deprecated annotations with `@deprecated` notes, two commented-out call statements, one seven-line commented-out block. Each read independently by two reviewers. |
+| `commented_out` | 11 lines | 11 true positives, 0 false. Two deprecated annotations with `@deprecated` notes, two commented-out call statements, one seven-line commented-out block. Each line individually inspected at its source context. |
 | `trivial_doc` | 31 lines (28 records) | 13 unambiguous restatements; 14 section headers (below); 4 false positives, all scoring 0.55–0.75 — comments whose extra clause carries what the identifier does not. |
 
 Eleven positives is a small numerator. It supports "no false positive was found in this sample",
@@ -142,7 +142,7 @@ That number is never published as a precision: it was written alongside the dete
 author, over fixtures the same author chose because the answer was already known.
 
 **Why there is no `warn`/`hard`.** The same calibration measured the distribution: over 15,318
-files, p50, p75, p90, p95 and p99 are all `0`, with a maximum of 52. `warn = p90 / hard = p99`
+files, p50, p75, p90, p95 and p99 are all `0`, with a maximum of 7. `warn = p90 / hard = p99`
 would set both to zero and flag every file carrying one noise line. A rare-event distribution has
 no meaningful cut, so the metric lives in the "Metrics outside `config.thresholds`" table above
 with `dead_symbol` — fixed `level: "warn"`, `threshold: null`, capped at `P2` — rather than

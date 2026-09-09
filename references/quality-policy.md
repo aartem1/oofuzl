@@ -157,9 +157,8 @@ not inherited from Steidl or from any other source, and nothing outside this rep
 A detected comment class is summed into `noise_comment_lines` only when its precision clears 0.85;
 below that it is reported in `evidence` and never counted, because summing classes gives the whole
 metric the precision of its weakest member. `short_inline`, at ~0.70, is the class this rule keeps
-out. Anywhere the floor is mentioned — `DESIGN.md` §5, the `comment_noise` row in
-`<plugin-root>/references/metrics.md`, `comments.py`'s own `SHORT_INLINE_WORDS` comment — it refers
-back to this paragraph.
+out. The floor is referred to wherever a counted class is justified, and always refers back to this
+paragraph.
 
 **Which precision figure to quote.** Three numbers exist and they are not interchangeable; the
 distinction and the evidence behind each are in `<plugin-root>/references/metrics.md`, "Where

@@ -691,12 +691,14 @@ def classify_file(text, ext, chars_per_token=4):
 def measure_comments(repo_root, inventory, cfg):
     """The layers.comments object. Always returns a status; never raises."""
     rows, langs = [], set()
-    # Three unrelated causes, counted apart. One "no verified comment reader"
-    # for all three told a reader that a `.rb` file, a file the process cannot
-    # open, and a file using syntax newer than the interpreter were the same
-    # problem -- only the first is about this module's language coverage, and
-    # only the first is unfixable by the person reading the report.
-    no_reader, unreadable, unparsed = 0, 0, 0
+    # Four unrelated causes, counted apart. "no source file has a verified
+    # comment reader" is the pre-wave baseline; the three below were introduced
+    # separately because a `.rb` file, a file the process cannot open, and a
+    # file using syntax newer than the interpreter are not the same problem.
+    # "no source file to measure" is a fourth distinct cause.
+    no_source, no_reader, unreadable, unparsed = 0, 0, 0, 0
+    if not inventory.source:
+        no_source = 1
     chars_per_token = cfg["chars_per_token"]
     for rel in inventory.source:
         ext = os.path.splitext(rel)[1].lower()
@@ -716,6 +718,8 @@ def measure_comments(repo_root, inventory, cfg):
         rows.append(dict(path=rel, **got))
 
     reasons = []
+    if no_source:
+        reasons.append("no source file has a verified comment reader")
     if no_reader:
         reasons.append("%d file(s) have no comment reader for their extension"
                        % no_reader)

@@ -1006,6 +1006,19 @@ class LayerTests(unittest.TestCase):
         layer = CM.measure_comments(self.root, _Inventory(["missing.py"]), self.cfg)
         self.assertEqual(layer["files"], [])
 
+    def test_empty_inventory_gives_not_measured_with_baseline_reason(self):
+        """When inventory.source is empty, report the baseline reason.
+
+        This is distinct from all files having no reader, all files being
+        unreadable, or all Python files failing to parse -- those are three
+        other causes already counted separately in the reasons list.
+        """
+        layer = CM.measure_comments(self.root, _Inventory([]), self.cfg)
+        self.assertEqual(layer["status"], "not_measured")
+        self.assertIn("no source file has a verified comment reader",
+                      layer["reason"])
+        self.assertEqual(layer["files"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
