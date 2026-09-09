@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from helpers import load_package
 
@@ -498,6 +500,55 @@ class GateOrderTests(unittest.TestCase):
             "def compute_total():\n    x = 5  # total\n", ".py")
         self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [2])
         self.assertEqual(got["evidence"]["short_inline"]["lines"], [])
+
+
+class _Inventory:
+    def __init__(self, source, tests=()):
+        self.source = list(source)
+        self.tests = list(tests)
+
+
+class LayerTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.cfg = {"chars_per_token": 4}
+
+    def _write(self, rel, text):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return rel
+
+    def test_measured_layer_lists_only_files_with_a_reader(self):
+        self._write("a.py", "# print(x)\ny = 1\n")
+        self._write("b.lua", "-- x\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py", "b.lua"]), self.cfg)
+        self.assertEqual(layer["status"], "partial")
+        self.assertEqual([row["path"] for row in layer["files"]], ["a.py"])
+        self.assertEqual(layer["not_measured_files"], 1)
+
+    def test_all_files_readable_gives_measured(self):
+        self._write("a.py", "x = 1\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py"]), self.cfg)
+        self.assertEqual(layer["status"], "measured")
+        self.assertEqual(layer["not_measured_files"], 0)
+
+    def test_no_readable_file_gives_not_measured_with_a_reason(self):
+        self._write("b.lua", "-- x\n")
+        layer = CM.measure_comments(self.root, _Inventory(["b.lua"]), self.cfg)
+        self.assertEqual(layer["status"], "not_measured")
+        self.assertIn("reader", layer["reason"])
+        self.assertEqual(layer["files"], [])
+
+    def test_languages_measured_is_reported(self):
+        self._write("a.py", "x = 1\n")
+        self._write("b.ts", "let x = 1;\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py", "b.ts"]), self.cfg)
+        self.assertEqual(layer["languages_measured"], ["brace", "python"])
+
+    def test_unreadable_file_is_skipped_without_raising(self):
+        layer = CM.measure_comments(self.root, _Inventory(["missing.py"]), self.cfg)
+        self.assertEqual(layer["files"], [])
 
 
 if __name__ == "__main__":

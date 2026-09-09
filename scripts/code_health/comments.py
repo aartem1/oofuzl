@@ -14,6 +14,7 @@ repository's comment volume; without the pass this module measures copyright.
 
 import ast
 import io
+import os
 import re
 import tokenize
 from collections import namedtuple
@@ -458,3 +459,37 @@ def classify_file(text, ext, chars_per_token=4):
             if evidence.get(k) is not None),
         "evidence": evidence,
     }
+
+
+def measure_comments(repo_root, inventory, cfg):
+    """The layers.comments object. Always returns a status; never raises."""
+    rows, langs, unread = [], set(), 0
+    chars_per_token = cfg["chars_per_token"]
+    for rel in inventory.source:
+        ext = os.path.splitext(rel)[1].lower()
+        if ext != ".py" and ext not in BRACE_EXT:
+            unread += 1
+            continue
+        try:
+            text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            unread += 1
+            continue
+        got = classify_file(text, ext, chars_per_token)
+        if got is None:
+            unread += 1
+            continue
+        langs.add("python" if ext == ".py" else "brace")
+        rows.append(dict(path=rel, **got))
+
+    layer = {"files": rows, "languages_measured": sorted(langs),
+             "not_measured_files": unread, "reason": None}
+    if not rows:
+        layer["status"] = "not_measured"
+        layer["reason"] = "no source file has a verified comment reader"
+    elif unread:
+        layer["status"] = "partial"
+        layer["reason"] = "%d file(s) have no verified comment reader" % unread
+    else:
+        layer["status"] = "measured"
+    return layer
