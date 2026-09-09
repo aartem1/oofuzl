@@ -776,6 +776,30 @@ class ClassifyFileTests(unittest.TestCase):
                          [{"line": 1, "function": "flush"}])
         self.assertEqual(got["noise_comment_lines"], 0)
 
+    def test_zero_coherence_is_line_ordered(self):
+        """`audit` asks a human to read these entries down the file.
+
+        `extract_python` used to return every `#` comment and then every
+        docstring, so the list interleaved by kind rather than by position:
+        the docstring on line 2 came after the `#` comment on line 5.
+        """
+        src = ('def alpha():\n'
+               '    """Zzz nothing shared here at all."""\n'
+               '    pass\n'
+               '\n'
+               '# unrelated words entirely different\n'
+               'def beta():\n'
+               '    pass\n'
+               '\n'
+               'def gamma():\n'
+               '    """Another unrelated sentence here."""\n'
+               '    pass\n')
+        got = CM.classify_file(src, ".py")
+        entries = got["evidence"]["zero_coherence"]
+        self.assertEqual([e["line"] for e in entries], [2, 5, 10])
+        self.assertEqual([e["function"] for e in entries],
+                         ["alpha", "beta", "gamma"])
+
     def test_zero_coherence_never_counts_as_noise(self):
         got = CM.classify_file("# see #42 for the reason\ndef flush():\n    pass\n",
                                ".py")

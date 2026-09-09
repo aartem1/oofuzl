@@ -73,7 +73,11 @@ def extract_python(text):
         raw.append(Comment(line=row, end_line=row,
                            text=tok.string.lstrip("#").strip(),
                            inline=bool(before.strip()), docstring=False))
-    return _merge_runs(raw) + docstrings
+    # Line order, not "every `#` comment then every docstring". `audit` asks a
+    # human to read `evidence.zero_coherence` (skills/audit/SKILL.md), and that
+    # list is built in this list's order -- interleaved by source position is
+    # the only order in which a reader can follow it down the file.
+    return sorted(_merge_runs(raw) + docstrings, key=lambda c: c.line)
 
 
 def _merge_runs(items):
