@@ -4,6 +4,10 @@ from helpers import load_package
 
 load_package()
 from code_health import comments as CM  # noqa: E402
+from comment_corpus import CORPUS  # noqa: E402
+
+# Below this, a class is reported in evidence and never summed into the metric.
+MIN_PRECISION = 0.85
 
 
 class PythonExtractionTests(unittest.TestCase):
@@ -389,6 +393,92 @@ class ClassifyFileTests(unittest.TestCase):
                                ".py")
         self.assertEqual(got["evidence"]["zero_coherence"], [])
         self.assertEqual(got["evidence"]["immune"], 1)
+
+
+class CorpusPrecisionTests(unittest.TestCase):
+    def _verdict(self, source, ext):
+        got = CM.classify_file(source, ext)
+        if got is None:
+            return "unreadable"
+        for klass in ("commented_out", "trivial_doc", "short_inline"):
+            bucket = got["evidence"].get(klass)
+            if bucket and bucket["count"]:
+                return klass
+        return "clean"
+
+    def test_every_row_is_classified_as_labelled(self):
+        wrong = []
+        for source, ext, expected in CORPUS:
+            got = self._verdict(source, ext)
+            if got != expected:
+                wrong.append((source.splitlines()[0], expected, got))
+        self.assertEqual(wrong, [], "misclassified rows: %r" % (wrong,))
+
+    def test_counted_classes_reach_the_precision_bar(self):
+        for klass in CM.COUNTED_CLASSES:
+            fired = [(s, e, x) for s, e, x in CORPUS if self._verdict(s, e) == klass]
+            self.assertTrue(fired, "%s never fired on the corpus" % klass)
+            right = sum(1 for _, _, x in fired if x == klass)
+            precision = right / len(fired)
+            with self.subTest(klass=klass):
+                self.assertGreaterEqual(
+                    precision, MIN_PRECISION,
+                    "%s precision %.2f is below the bar; move it out of "
+                    "COUNTED_CLASSES rather than loosening the bar"
+                    % (klass, precision))
+
+
+class GateOrderTests(unittest.TestCase):
+    """Pin the order the classification gates run in, not just the outcome.
+
+    Each case is chosen so that swapping its two named adjacent gates flips
+    the verdict; a test that only checks the final bucket, without a case
+    shaped like this, would not notice a reordering.
+    """
+
+    def test_commented_out_gate_runs_before_prose_immunity(self):
+        """`is_commented_out` must run before `is_prose_immune`.
+
+        `None` is on the prose-immune word list (it documents null
+        semantics), but `# return None` is a return statement, not
+        documentation -- swapping the gates would make it immune instead.
+        """
+        got = CM.classify_file("# return None\nx = 1\n", ".py")
+        self.assertEqual(got["evidence"]["commented_out"]["lines"], [1])
+        self.assertEqual(got["evidence"]["immune"], 0)
+
+    def test_directive_gate_runs_before_the_commented_out_detector(self):
+        """`is_directive` must run before `is_commented_out`.
+
+        `x = 1` inside the comment body also reads as an assignment
+        statement; swapping the gates would classify the TODO as code
+        instead of leaving it as directive metadata.
+        """
+        got = CM.classify_file("# TODO: x = 1\ny = 2\n", ".py")
+        self.assertEqual(got["evidence"]["immune"], 1)
+        self.assertEqual(got["evidence"]["commented_out"]["lines"], [])
+
+    def test_directive_gate_runs_before_the_short_inline_detector(self):
+        """`is_directive` must run before the short-inline word count.
+
+        `noqa` alone is one inline word; swapping the gates would flag it
+        as short-inline noise instead of tool-directive metadata.
+        """
+        got = CM.classify_file("x = 1  # noqa\n", ".py")
+        self.assertEqual(got["evidence"]["immune"], 1)
+        self.assertEqual(got["evidence"]["short_inline"]["lines"], [])
+
+    def test_coherence_gate_runs_before_the_short_inline_detector(self):
+        """The coherence check must run before the short-inline word count.
+
+        `# total` is one inline word but scores above the coherence bar
+        against `compute_total`; swapping the gates would report it as
+        short-inline instead of trivial-doc.
+        """
+        got = CM.classify_file(
+            "def compute_total():\n    x = 5  # total\n", ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [2])
+        self.assertEqual(got["evidence"]["short_inline"]["lines"], [])
 
 
 if __name__ == "__main__":
