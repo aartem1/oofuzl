@@ -146,6 +146,11 @@ class CommentedOutTests(unittest.TestCase):
         "for row in rows:",
         '"key": value,',
         "result = fetch(",
+        # Real deprecated annotation, xhh (Fix 3): a valueless AnnAssign whose
+        # annotation is a type expression (Subscript), not a bare Constant.
+        "clusters: dict[str, Any]",
+        # Real commented-out call, xhh (Fix 4): no whitespace before the "(".
+        "put_oauth_error_state(self, HTTPStatus.FORBIDDEN)",
     ]
     # Every entry is an open ruff ERA001 false-positive report.
     NOT_CODE = [
@@ -156,6 +161,21 @@ class CommentedOutTests(unittest.TestCase):
         "ruff: ignore[E501]",
         "a plain sentence about the parser",
         "-*- coding: utf-8 -*-",
+        # /proc/meminfo parser field-format note (Fix 3): a valueless
+        # AnnAssign whose annotation is a bare string Constant, not a type.
+        'Format: "MemAvailable:   1234567 kB"',
+        # Metrics-direction note (Fix 4): a call with a space before "(".
+        "lower_is_better (default)",
+        # except-handler comment, xhh (Fix 5): "continue" inside
+        # "continue-on-error" is not the `continue` statement keyword.
+        "continue-on-error (CancelledError propagates",
+        # BRAND tuple's inline comment, xhh (Fix 2): the nested '#' before
+        # "D6001C" opens a Python comment, truncating the parse to nothing.
+        "#D6001C — HH brand red (service.hh), primary accent",
+        "data,",
+        "x",
+        "the parser",
+        "C/Java/C# typed form (, ).",
     ]
 
     def test_code_is_detected(self):
@@ -226,6 +246,55 @@ class CommentedOutTests(unittest.TestCase):
         # Verbatim from scripts/code_health/comments.py line 374
         prose_that_parses = "C/Java/C# typed form (`static int read_block(`, `static char *read_line(`)."
         self.assertFalse(CM.is_commented_out(prose_that_parses))
+
+
+class DocstringGateTests(unittest.TestCase):
+    """Fix 1: `commented_out` must never run on a docstring.
+
+    eradicate's own algorithm only ever examines a `#` line comment;
+    extending it to docstrings was the design error behind every live
+    `commented_out` false positive found against three real repositories
+    (Task 9) -- a JSON schema worked example in `xhh/ajax.py`, a payload
+    tree in `reports_quarterly_summary.py`, and `feature_id:`/`code_owner:`
+    metadata in `resume-profile-front` all read as majority-code line by
+    line while being documentation.
+    """
+
+    def test_docstring_record_is_marked_as_such(self):
+        got = CM.extract_python('def f():\n    """Return f."""\n    return 1\n')
+        record = next(c for c in got if c.text == "Return f.")
+        self.assertTrue(record.docstring)
+
+    def test_ordinary_comment_is_not_marked_as_a_docstring(self):
+        got = CM.extract_python("# set up\nx = 1\n")
+        self.assertFalse(got[0].docstring)
+
+    def test_docstring_with_a_schema_example_never_reaches_commented_out(self):
+        """Shape of the xhh/ajax.py and resume-profile-front false
+        positives: quoted, indented keys outnumber the surrounding prose
+        5-to-2 and used to fire the majority rule on the whole docstring.
+        """
+        src = ('def handler():\n'
+               '    """Request payload.\n\n'
+               '    {\n'
+               '        "feature_id": 12,\n'
+               '        "code_owner": "team-x",\n'
+               '        "status": "active",\n'
+               '        "priority": 3,\n'
+               '    }\n'
+               '    """\n'
+               '    return {}\n')
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["evidence"]["commented_out"]["count"], 0)
+
+    def test_trivial_doc_still_fires_on_a_docstring(self):
+        """`trivial_doc` is a docstring's main home; the gate above must not
+        block it -- Steidl's own worked example (`removeAllMarkers`).
+        """
+        src = 'def remove_all_markers():\n    """Removes all markers."""\n    pass\n'
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [2])
+        self.assertEqual(got["evidence"]["commented_out"]["count"], 0)
 
 
 class CoherenceTests(unittest.TestCase):

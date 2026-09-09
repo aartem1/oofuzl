@@ -138,4 +138,64 @@ CORPUS = [
     ("# workaround for a driver bug on the 5.4 kernel\nx = 1\n", ".py", "clean"),
     ("x = 1  # noqa: E501\n", ".py", "clean"),
     ("# Copyright 2026 Acme\nx = 1\n", ".py", "clean"),
+
+    # --- live-code false positives (Task 9) ------------------------------
+    # These eight rows are the first in this corpus drawn from real, running
+    # code rather than from imagination: each is the exact text that made a
+    # `commented_out` hit against one of three inspected repositories
+    # (15,318 source files) a false positive, found by hand-checking every
+    # hit before this fix landed. Every other row above was picked because
+    # its author already knew which way it should fall; these were picked
+    # because a live repository proved the detector wrong.
+
+    # Fix 1: a docstring must never reach the `commented_out` gate. Shape of
+    # the xhh/ajax.py and resume-profile-front false positives -- a
+    # `feature_id:` / `code_owner:` schema worked example, indented and
+    # quoted, whose lines outnumber the surrounding prose 5-to-2 and used to
+    # fire the majority rule on the whole docstring.
+    ('def handler():\n'
+     '    """Request payload.\n\n'
+     '    {\n'
+     '        "feature_id": 12,\n'
+     '        "code_owner": "team-x",\n'
+     '        "status": "active",\n'
+     '        "priority": 3,\n'
+     '    }\n'
+     '    """\n'
+     '    return {}\n', ".py", "clean"),
+
+    # Fix 2: an empty parse is not evidence of code. Verbatim shape of a
+    # `BRAND = (214, 0, 28)  # #D6001C -- HH brand red (service.hh), primary
+    # accent` line: the nested '#' before "D6001C" opens a Python comment
+    # that truncates everything after it, so `compile` succeeds on a module
+    # body of nothing.
+    ('BRAND = (214, 0, 28)  # #D6001C — HH brand red (service.hh), primary accent\n',
+     ".py", "clean"),
+
+    # Fix 3: a valueless annotation whose annotation is a bare Constant is
+    # prose, not code. `Format: "MemAvailable:   1234567 kB"` (a /proc/meminfo
+    # parser's field-format note) parses as ast.AnnAssign with a string
+    # Constant annotation and must stay clean; `clusters: dict[str, Any]` (a
+    # real deprecated annotation found in xhh) parses the same shape with a
+    # Subscript annotation and IS commented-out code.
+    ('# Format: "MemAvailable:   1234567 kB"\nx = 1\n', ".py", "clean"),
+    ("# clusters: dict[str, Any]\nx = 1\n", ".py", "commented_out"),
+
+    # Fix 4: a call with whitespace before its parenthesis is prose, not
+    # code. `lower_is_better (default)` (a metrics-direction note) parses as
+    # Expr(Call) and must stay clean; `put_oauth_error_state(self,
+    # HTTPStatus.FORBIDDEN)` (real commented-out code found in xhh) parses
+    # the same shape with no space before the "(".
+    ("# lower_is_better (default)\nx = 1\n", ".py", "clean"),
+    ("# put_oauth_error_state(self, HTTPStatus.FORBIDDEN)\nx = 1\n",
+     ".py", "commented_out"),
+
+    # Fix 5: a statement keyword must match a whole token, not just a `\b`
+    # boundary a hyphen also satisfies. Verbatim shape of `except Exception
+    # as exc:  # continue-on-error (CancelledError propagates`, where the
+    # old `_STATEMENT_KEYWORD` pattern matched "continue" inside
+    # "continue-on-error".
+    ('try:\n    risky()\n'
+     'except Exception as exc:  # continue-on-error (CancelledError propagates\n'
+     '    log(exc)\n', ".py", "clean"),
 ]

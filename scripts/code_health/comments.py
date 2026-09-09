@@ -21,8 +21,16 @@ from collections import namedtuple
 
 # 1-based lines. `text` has comment markers stripped; consecutive own-line
 # comments are merged into one record, because every threshold below is
-# defined over a comment as a unit, not over a physical line.
-Comment = namedtuple("Comment", "line end_line text inline")
+# defined over a comment as a unit, not over a physical line. `docstring` is
+# true only for records `_python_docstrings` produces -- eradicate's own
+# algorithm never examines anything but a `#` line comment, and extending it
+# to a docstring was the mistake behind every `commented_out` false positive
+# found on live code (Task 9): a JSON schema worked example in `xhh/ajax.py`
+# and `feature_id:` / `code_owner:` metadata in `resume-profile-front` both
+# read as majority-code line by line while being documentation, not a
+# commented-out block. `classify_file` uses this field to keep the gate
+# out of a docstring's way while still running `trivial_doc` on it.
+Comment = namedtuple("Comment", "line end_line text inline docstring")
 
 
 def extract_python(text):
@@ -40,7 +48,7 @@ def extract_python(text):
         before = lines[row - 1][:col] if row - 1 < len(lines) else ""
         raw.append(Comment(line=row, end_line=row,
                            text=tok.string.lstrip("#").strip(),
-                           inline=bool(before.strip())))
+                           inline=bool(before.strip()), docstring=False))
     return _merge_runs(raw) + _python_docstrings(text)
 
 
@@ -74,7 +82,8 @@ def _python_docstrings(text):
             continue
         expr = node.body[0]
         out.append(Comment(line=expr.lineno, end_line=expr.end_lineno,
-                           text=ast.get_docstring(node).strip(), inline=False))
+                           text=ast.get_docstring(node).strip(), inline=False,
+                           docstring=True))
     return sorted(out, key=lambda c: c.line)
 
 
@@ -140,7 +149,13 @@ _MULTILINE_ASSIGN = re.compile(r"^\s*\w+\s*=.*[(\[{]$")
 _BRACKETS_ONLY = re.compile(r"^[\s)\]}]+[,:]?$")
 _DICT_ITEM = re.compile(r"""^\s*['"]\w+['"]\s*:.+[,{]\s*$""")
 _BLOCK_KEYWORD = re.compile(r"^\s*(if|elif|else|for|while|with|try|except|finally|def|class|async)\b.*:\s*$")
-_STATEMENT_KEYWORD = re.compile(r"^\s*(return|break|continue|yield|raise)\b.*")
+# `\b` alone is not a token boundary here: it fires on the transition between
+# a word character and a hyphen, so the old pattern matched "continue" inside
+# "continue-on-error" and flagged `except Exception as exc:  # continue-on-error
+# (CancelledError propagates` as commented-out code (real comment, xhh). The
+# lookahead below additionally refuses a following hyphen, which `\b` alone
+# does not.
+_STATEMENT_KEYWORD = re.compile(r"^\s*(return|break|continue|yield|raise)(?![\w-]).*")
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
@@ -182,18 +197,13 @@ def is_commented_out(text):
     return code_looking > len(non_empty_lines) / 2
 
 
-def _is_bare_expr_without_call(line):
-    """True if the line is a bare expression with no function calls.
+def _is_bare_expr_without_call(tree):
+    """True if the parsed line is a bare expression with no function calls.
 
     Prose like "C/Java/C# typed form" parses as valid Python (a binary
     expression), but is documentation, not commented-out code. A bare
     expression with no calls is likely prose that happened to parse.
     """
-    try:
-        tree = ast.parse(line, mode='exec')
-    except (SyntaxError, ValueError):
-        return False
-
     # Single expression statement with no calls is likely prose
     if len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
         expr = tree.body[0].value
@@ -204,6 +214,42 @@ def _is_bare_expr_without_call(line):
         return True  # No calls found, so it's likely prose
 
     return False  # Not a single bare expression
+
+
+def _is_prose_annotation(tree):
+    """True if the line is a valueless annotation whose annotation is a bare constant.
+
+    `Format: "MemAvailable:   1234567 kB"` (real comment, a /proc/meminfo
+    parser) parses as an ast.AnnAssign with no value and a string Constant
+    annotation -- prose with a colon, not code. `clusters: dict[str, Any]`
+    (real deprecated annotation, xhh) is also a valueless AnnAssign, but its
+    annotation is a Subscript -- a type expression -- and IS commented-out
+    code. The discriminator is the annotation node's shape, not whether a
+    value is present.
+    """
+    if len(tree.body) != 1:
+        return False
+    stmt = tree.body[0]
+    return (isinstance(stmt, ast.AnnAssign) and stmt.value is None
+            and isinstance(stmt.annotation, ast.Constant))
+
+
+def _has_call_with_space_before_parenthesis(tree, line):
+    """True when a call in the parsed line has whitespace before its "(".
+
+    `lower_is_better (default)` parses as Expr(Call) and reads as code, but
+    is prose (real comment, a metrics-direction note). PEP 8 forbids
+    whitespace between a callee and its argument list, so real Python
+    essentially never has it while English prose often does; contrast the
+    genuine commented-out call `put_oauth_error_state(self,
+    HTTPStatus.FORBIDDEN)` (real comment, xhh), which has none.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            end = node.func.end_col_offset
+            if end is not None and end < len(line) and line[end] != "(":
+                return True
+    return False
 
 
 def _line_is_code(line):
@@ -219,15 +265,29 @@ def _line_is_code(line):
     if _MULTILINE_ASSIGN.match(line) or line.endswith("\\") or _DICT_ITEM.match(line):
         return True
     try:
-        compile(line, "<comment>", "exec")
+        tree = ast.parse(line, mode="exec")
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         # MemoryError: CPython's parser raises this on stack overflow when
         # processing pathological input like a 50k-character unary operator run.
         # Catching it prevents a single malformed comment from crashing the audit.
         return False
 
+    if not tree.body:
+        # `BRAND = (214, 0, 28)  # #D6001C -- HH brand red (service.hh),
+        # primary accent` (real comment, xhh): the nested '#' before "D6001C"
+        # opens a Python comment that truncates everything after it, so this
+        # parses -- but to an empty module. An empty parse is not evidence
+        # of code.
+        return False
+
     # Bare expressions without calls are prose, not code.
-    if _is_bare_expr_without_call(line):
+    if _is_bare_expr_without_call(tree):
+        return False
+
+    if _is_prose_annotation(tree):
+        return False
+
+    if _has_call_with_space_before_parenthesis(tree, line):
         return False
 
     return True
@@ -259,7 +319,7 @@ def extract_brace(text):
                 end = n
             out.append(Comment(line=line, end_line=line,
                                text=text[start:end].strip(),
-                               inline=_has_code_before(text, i)))
+                               inline=_has_code_before(text, i), docstring=False))
             i = end
             continue
         if ch == "/" and nxt == "*":
@@ -268,7 +328,7 @@ def extract_brace(text):
             body = text[start:end if end != -1 else n]
             out.append(Comment(line=line, end_line=line + body.count("\n"),
                                text=_strip_stars(body),
-                               inline=_has_code_before(text, i)))
+                               inline=_has_code_before(text, i), docstring=False))
             line += body.count("\n")
             i = n if end == -1 else end + 2
             continue
@@ -458,7 +518,14 @@ def classify_file(text, ext, chars_per_token=4):
         # Commented-out code is code, not prose -- checked ahead of the prose
         # gate so a line like `# return None` is classified as a return
         # statement, never protected as documentation of null semantics.
-        if ext == ".py" and is_commented_out(item.text):
+        # A docstring never reaches this gate: eradicate itself only ever
+        # examines a `#` line comment, and every live false positive found
+        # against real repositories (Task 9) was a docstring whose worked
+        # example -- a JSON schema in `xhh/ajax.py`, `feature_id:` metadata
+        # in `resume-profile-front` -- out-numbered its own prose line by
+        # line. A docstring instead falls through to `trivial_doc`, which is
+        # its main home.
+        if ext == ".py" and not item.docstring and is_commented_out(item.text):
             klass = "commented_out"
         else:
             if is_prose_immune(item.text):
