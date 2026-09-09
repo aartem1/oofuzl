@@ -42,5 +42,48 @@ class PythonExtractionTests(unittest.TestCase):
         self.assertIsNone(CM.extract_python("def (:\n"))
 
 
+class BraceExtractionTests(unittest.TestCase):
+    def test_line_comment(self):
+        got = CM.extract_brace("int x = 1; // counter\n")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].text, "counter")
+        self.assertTrue(got[0].inline)
+
+    def test_block_comment_spans_lines(self):
+        got = CM.extract_brace("/* one\n   two */\nx();\n")
+        self.assertEqual(got[0].line, 1)
+        self.assertEqual(got[0].end_line, 2)
+        self.assertFalse(got[0].inline)
+
+    def test_slashes_inside_a_string_are_not_a_comment(self):
+        self.assertEqual(CM.extract_brace('var u = "http://x";\n'), [])
+
+    def test_escaped_quote_does_not_end_the_string(self):
+        self.assertEqual(CM.extract_brace('var s = "a\\" // b";\n'), [])
+
+    def test_template_literal_is_a_string(self):
+        self.assertEqual(CM.extract_brace("var s = `a // b`;\n"), [])
+
+    def test_consecutive_line_comments_merge(self):
+        got = CM.extract_brace("// a\n// b\nx();\n")
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].text, "a\nb")
+
+    def test_unterminated_line_comment_at_eof_is_kept(self):
+        got = CM.extract_brace("x(); // trailing")
+        self.assertEqual(len(got), 1)
+
+
+class DispatchTests(unittest.TestCase):
+    def test_unknown_extension_returns_none_not_empty(self):
+        self.assertIsNone(CM.extract("-- lua comment\n", ".lua"))
+
+    def test_python_extension_routes_to_the_python_reader(self):
+        self.assertEqual(len(CM.extract("# x\n", ".py")), 1)
+
+    def test_brace_extension_routes_to_the_brace_reader(self):
+        self.assertEqual(len(CM.extract("// x\n", ".ts")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

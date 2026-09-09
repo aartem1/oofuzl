@@ -74,3 +74,87 @@ def _python_docstrings(text):
         out.append(Comment(line=expr.lineno, end_line=expr.end_lineno,
                            text=ast.get_docstring(node).strip(), inline=False))
     return sorted(out, key=lambda c: c.line)
+
+
+# Extensions with a verified `//` + `/* */` reader. `.lua` (`--`), `.rb` (`#`
+# plus `=begin`) and `.php` (three syntaxes, one of them `#`) are deliberately
+# absent: each needs its own reader, and an unverified one would report a
+# number nobody checked -- the defect this repository already refuses for
+# lizard's nesting column.
+BRACE_EXT = frozenset({
+    ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".java",
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".go", ".kt", ".rs", ".swift", ".scala", ".m", ".mm",
+})
+
+
+def extract(text, ext):
+    """Comments of one source file, or None when no reader is verified for `ext`."""
+    if ext == ".py":
+        return extract_python(text)
+    if ext in BRACE_EXT:
+        return extract_brace(text)
+    return None
+
+
+def extract_brace(text):
+    """`//` and `/* */`, with string, char and template literals skipped."""
+    out = []
+    i, n, line = 0, len(text), 1
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch in "\"'`":
+            i, line = _skip_literal(text, i, line)
+            continue
+        if ch == "/" and nxt == "/":
+            start = i + 2
+            end = text.find("\n", start)
+            if end == -1:
+                end = n
+            out.append(Comment(line=line, end_line=line,
+                               text=text[start:end].strip(),
+                               inline=_has_code_before(text, i)))
+            i = end
+            continue
+        if ch == "/" and nxt == "*":
+            start = i + 2
+            end = text.find("*/", start)
+            body = text[start:end if end != -1 else n]
+            out.append(Comment(line=line, end_line=line + body.count("\n"),
+                               text=_strip_stars(body),
+                               inline=_has_code_before(text, i)))
+            line += body.count("\n")
+            i = n if end == -1 else end + 2
+            continue
+        if ch == "\n":
+            line += 1
+        i += 1
+    return _merge_runs(out)
+
+
+def _skip_literal(text, i, line):
+    """Advance past the literal opening at `i`; return the new (index, line)."""
+    quote, n = text[i], len(text)
+    i += 1
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "\n":
+            line += 1
+        if ch == quote:
+            return i + 1, line
+        i += 1
+    return n, line
+
+
+def _has_code_before(text, i):
+    start = text.rfind("\n", 0, i) + 1
+    return bool(text[start:i].strip())
+
+
+def _strip_stars(body):
+    kept = [ln.strip().lstrip("*").strip() for ln in body.splitlines()]
+    return "\n".join(ln for ln in kept if ln)
