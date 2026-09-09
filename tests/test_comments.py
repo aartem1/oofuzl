@@ -130,5 +130,38 @@ class ImmunityTests(unittest.TestCase):
                 self.assertFalse(CM.is_immune(text))
 
 
+class CommentedOutTests(unittest.TestCase):
+    CODE = [
+        "print(old_result)",
+        "return None",
+        "x = compute(a, b)",
+        "import json",
+        "if ready:",
+        "for row in rows:",
+        '"key": value,',
+        "result = fetch(",
+    ]
+    # Every entry is an open ruff ERA001 false-positive report.
+    NOT_CODE = [
+        "TODO: remove print(x) once the API lands",
+        "see issue #10072 for the original example",
+        "the helper must return early here",
+        "/// script\n/// requires-python = \">=3.11\"",
+        "ruff: ignore[E501]",
+        "a plain sentence about the parser",
+        "-*- coding: utf-8 -*-",
+    ]
+
+    def test_code_is_detected(self):
+        for text in self.CODE:
+            with self.subTest(text=text):
+                self.assertTrue(CM.is_commented_out(text))
+
+    def test_prose_is_not_detected(self):
+        for text in self.NOT_CODE:
+            with self.subTest(text=text):
+                self.assertFalse(CM.is_commented_out(text))
+
+
 if __name__ == "__main__":
     unittest.main()

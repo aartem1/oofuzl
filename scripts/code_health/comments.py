@@ -117,6 +117,17 @@ _IMMUNE_RE = re.compile("|".join("(?:%s)" % p for p in _IMMUNE_PATTERNS),
 # 10 examples at this length, with >=88% agreement in nine of them.
 LONG_COMMENT_WORDS = 30
 
+# eradicate v3.0.1's pipeline. The final step is a real parse, which is why
+# this class is the most accurate of the three (P 0.89 / R 0.95, Steidl 2013);
+# everything above it exists to stop prose from ever reaching `compile`.
+_CODE_INDICATORS = ("(", ")", "[", "]", "{", "}", ":", "=", "%")
+_CODE_WORDS = ("print", "return", "break", "continue", "import", "pass", "raise")
+_MULTILINE_ASSIGN = re.compile(r"^\s*\w+\s*=.*[(\[{]$")
+_BRACKETS_ONLY = re.compile(r"^[\s)\]}]+[,:]?$")
+_DICT_ITEM = re.compile(r"""^\s*['"]\w+['"]\s*:.+[,{]\s*$""")
+_BLOCK_KEYWORD = re.compile(r"^\s*(if|elif|else|for|while|with|try|except|finally|def|class|async)\b.*:\s*$")
+_STATEMENT_KEYWORD = re.compile(r"^\s*(return|break|continue|yield|raise)\b.*")
+
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
@@ -129,6 +140,32 @@ def is_immune(text):
     if len(words_of(text)) >= LONG_COMMENT_WORDS:
         return True
     return bool(_IMMUNE_RE.search(text))
+
+
+def is_commented_out(text):
+    """True when the comment body parses or reads as Python source."""
+    if is_immune(text):
+        return False
+    return any(_line_is_code(line) for line in text.splitlines())
+
+
+def _line_is_code(line):
+    line = line.strip()
+    if not line:
+        return False
+    if not (any(ind in line for ind in _CODE_INDICATORS)
+            or any(re.search(r"\b%s\b" % w, line) for w in _CODE_WORDS)):
+        return False
+    if (_BLOCK_KEYWORD.match(line) or _BRACKETS_ONLY.match(line)
+            or _STATEMENT_KEYWORD.match(line)):
+        return True
+    if _MULTILINE_ASSIGN.match(line) or line.endswith("\\") or _DICT_ITEM.match(line):
+        return True
+    try:
+        compile(line, "<comment>", "exec")
+    except (SyntaxError, ValueError):
+        return False
+    return True
 
 
 def extract(text, ext):
