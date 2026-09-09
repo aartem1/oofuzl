@@ -1,15 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import load_package
 
 load_package()
 from code_health import comments as CM  # noqa: E402
 from comment_corpus import CORPUS  # noqa: E402
-
-# Below this, a class is reported in evidence and never summed into the metric.
-MIN_PRECISION = 0.85
 
 
 class PythonExtractionTests(unittest.TestCase):
@@ -60,7 +58,8 @@ class PythonExtractionTests(unittest.TestCase):
         syntax newer than the interpreter running the audit (PEP 695
         `type X = int` on 3.11, `match` on 3.9).
         """
-        self.assertIsNone(CM.extract_python('# print(x)\ndef f():\n    """Doc."""\n    x = = 1\n'))
+        src = '# print(x)\ndef f():\n    """Doc."""\n    x = = 1\n'
+        self.assertIsNone(CM.extract_python(src))
         self.assertIsNone(CM.extract_python("a b c\n"))
 
 
@@ -252,11 +251,27 @@ class CommentedOutTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(CM.is_commented_out(text))
 
-    def test_pathological_input_does_not_raise(self):
-        # CPython's parser raises MemoryError on stack overflow from a long
-        # unary-operator run. The detector must catch it, not crash the audit.
-        pathological = "-" * 50000 + "1"
-        result = CM.is_commented_out(pathological)
+    def test_pathological_input_reaches_the_parser_and_does_not_raise(self):
+        """CPython's parser raises MemoryError on a long unary-operator run.
+
+        This test used to pass `"-" * 50000 + "1"`, which contains none of
+        `_CODE_INDICATORS` and no code word, so `_line_is_code` returned False
+        before `ast.parse` was ever called -- the handler the test names was
+        never reached. Instrumented: 0 calls to `ast.parse` for that input, 1
+        for the one below, which carries an `=` and so gets past the indicator
+        gate. The assertion on `seen` is what keeps it reaching the parser.
+        """
+        pathological = "x = " + "-" * 50000 + "1"
+        seen = []
+        real = CM.ast.parse
+
+        def spy(*args, **kwargs):
+            seen.append(args[0])
+            return real(*args, **kwargs)
+
+        with mock.patch.object(CM.ast, "parse", spy):
+            result = CM.is_commented_out(pathological)
+        self.assertEqual(len(seen), 1, "the input never reached ast.parse")
         self.assertFalse(result)
 
     def test_cyrillic_identifier_does_not_shift_the_space_check(self):
@@ -826,18 +841,26 @@ class CorpusPrecisionTests(unittest.TestCase):
                 wrong.append((source.splitlines()[0], expected, got))
         self.assertEqual(wrong, [], "misclassified rows: %r" % (wrong,))
 
-    def test_counted_classes_reach_the_precision_bar(self):
+    def test_every_counted_class_fires_at_least_once(self):
+        """What this class can actually assert, said in its own name.
+
+        There used to be a precision assertion here against a 0.85 bar. It
+        could never fail: `test_every_row_is_classified_as_labelled` above
+        already asserts that every row lands in the class it is labelled
+        with, so precision over this corpus is 1.00 by construction and the
+        bar was inert. What is left is the one thing this corpus can
+        independently show -- that neither counted class has gone silent,
+        which a detector regression would otherwise hide behind a green
+        "no misclassified rows".
+
+        The 0.85 floor itself is policy, not a corpus measurement; it lives
+        in `references/quality-policy.md`, and the class's live-code
+        precision is in `references/metrics.md`.
+        """
         for klass in CM.COUNTED_CLASSES:
-            fired = [(s, e, x) for s, e, x in CORPUS if self._verdict(s, e) == klass]
-            self.assertTrue(fired, "%s never fired on the corpus" % klass)
-            right = sum(1 for _, _, x in fired if x == klass)
-            precision = right / len(fired)
+            fired = [s for s, e, _ in CORPUS if self._verdict(s, e) == klass]
             with self.subTest(klass=klass):
-                self.assertGreaterEqual(
-                    precision, MIN_PRECISION,
-                    "%s precision %.2f is below the bar; move it out of "
-                    "COUNTED_CLASSES rather than loosening the bar"
-                    % (klass, precision))
+                self.assertTrue(fired, "%s never fired on the corpus" % klass)
 
 
 class GateOrderTests(unittest.TestCase):

@@ -221,8 +221,18 @@ class CommentFindingTests(unittest.TestCase):
         self.assertEqual(F.comment_findings(layer), [])
 
     def test_a_none_value_produces_no_finding_and_does_not_raise(self):
-        # `noise_comment_lines: None` means "not measured", never "zero" --
-        # the same guard `size_findings` applies before comparing.
+        """A defensive guard against a row shape `measure_comments` cannot emit.
+
+        `measure_comments` never puts an unreadable file in `files`: a file
+        with no reader, a file it cannot open, and a Python file that does
+        not parse are all counted in `not_measured_files` and skipped, so
+        `noise_comment_lines` is always an integer in a real document. This
+        row is therefore hand-built, and it is kept rather than deleted
+        because the guard it pins is what makes a future layer change safe --
+        if `measure_comments` ever starts emitting per-file "not measured"
+        rows, `None` must stay "not measured" and never be compared as zero,
+        the same rule `size_findings` follows.
+        """
         layer = {"files": [
             {"path": "a.rb", "noise_comment_lines": None, "evidence": None}]}
         self.assertEqual(F.comment_findings(layer), [])

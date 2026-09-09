@@ -98,7 +98,7 @@ _DOC_NODES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _python_docstrings(text):
-    """Docstring records with their owning declaration, or None if `text` does not parse.
+    """Docstring records with their owner, or None if `text` does not parse.
 
     `None` and `[]` are different answers: `[]` is "parsed, has no docstring",
     `None` is "never parsed". Only the caller can tell them apart, and
