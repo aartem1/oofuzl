@@ -170,5 +170,80 @@ class CommentedOutTests(unittest.TestCase):
         self.assertFalse(result)
 
 
+class CoherenceTests(unittest.TestCase):
+    def test_identifier_splits_on_camel_and_snake(self):
+        self.assertEqual(CM.split_identifier("removeAllMarkers"),
+                         ["remove", "all", "markers"])
+        self.assertEqual(CM.split_identifier("remove_all_markers"),
+                         ["remove", "all", "markers"])
+        self.assertEqual(CM.split_identifier("HTTPServerError"),
+                         ["http", "server", "error"])
+
+    def test_paper_example_scores_three_quarters(self):
+        # Steidl, ICPC 2013: this exact pair is the paper's worked example.
+        got = CM.coherence("removes all defined markers", "removeAllMarkers")
+        self.assertAlmostEqual(got, 0.75)
+
+    def test_plural_matches_within_levenshtein_one(self):
+        self.assertAlmostEqual(CM.coherence("markers", "marker"), 1.0)
+
+    def test_two_edits_apart_do_not_match(self):
+        self.assertAlmostEqual(CM.coherence("marker", "mask"), 0.0)
+
+    def test_comment_with_no_words_returns_none(self):
+        self.assertIsNone(CM.coherence("-----", "anything"))
+
+    def test_informative_comment_scores_below_the_threshold(self):
+        got = CM.coherence("markers survive a reload; the cache does not",
+                           "removeAllMarkers")
+        self.assertLess(got, CM.TRIVIAL_COHERENCE)
+
+
+class DeclarationTests(unittest.TestCase):
+    def test_function_and_class_names_by_line(self):
+        src = "class Cache:\n    def get_key(self):\n        return 1\n"
+        self.assertEqual(CM.declarations_python(src), {1: "Cache", 2: "get_key"})
+
+    def test_decorated_function_reports_the_def_line(self):
+        src = "@cached\ndef load_all():\n    return []\n"
+        self.assertEqual(CM.declarations_python(src), {2: "load_all"})
+
+    def test_unparseable_source_returns_empty(self):
+        self.assertEqual(CM.declarations_python("def (:\n"), {})
+
+
+class BraceDeclarationTests(unittest.TestCase):
+    def test_keyword_forms(self):
+        self.assertEqual(CM.declarations_brace("function returnTotalPrice() {}\n"),
+                         {1: "returnTotalPrice"})
+        self.assertEqual(CM.declarations_brace("export class UserCache {}\n"),
+                         {1: "UserCache"})
+        self.assertEqual(CM.declarations_brace("func LoadAll() error {\n"),
+                         {1: "LoadAll"})
+        self.assertEqual(CM.declarations_brace("fn parse_all(x: u8) {\n"),
+                         {1: "parse_all"})
+
+    def test_c_style_typed_declaration(self):
+        self.assertEqual(CM.declarations_brace("static int read_block(int fd) {\n"),
+                         {1: "read_block"})
+
+    def test_call_site_is_not_a_declaration(self):
+        self.assertEqual(CM.declarations_brace("    doWork(x);\n"), {})
+
+    def test_control_keyword_is_not_a_declaration(self):
+        self.assertEqual(CM.declarations_brace("    if (ready) {\n"), {})
+
+
+class DeclarationDispatchTests(unittest.TestCase):
+    def test_python_routes_to_ast(self):
+        self.assertEqual(CM.declarations("def f():\n    pass\n", ".py"), {1: "f"})
+
+    def test_brace_routes_to_regex(self):
+        self.assertEqual(CM.declarations("function f() {}\n", ".js"), {1: "f"})
+
+    def test_unknown_extension_has_no_declarations(self):
+        self.assertEqual(CM.declarations("function f()\n", ".lua"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

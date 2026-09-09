@@ -256,3 +256,97 @@ def _has_code_before(text, i):
 def _strip_stars(body):
     kept = [ln.strip().lstrip("*").strip() for ln in body.splitlines()]
     return "\n".join(ln for ln in kept if ln)
+
+
+# Steidl (ICPC 2013) section 4: a comment whose words are mostly the words of
+# the identifier it sits on is trivial. The 0.5 threshold is the paper's, and
+# it was validated by asking 16 developers about 30 examples -- in nine of ten
+# trivial cases, over 80% agreed. Correctness of the automatic verdict: ~90%.
+TRIVIAL_COHERENCE = 0.5
+
+_SPLIT_RE = re.compile(
+    r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def split_identifier(name):
+    return [part.lower() for part in _SPLIT_RE.split(name) if part]
+
+
+def _within_one_edit(a, b):
+    """Levenshtein distance below 2, without building the DP table."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    if i == len(a):
+        return True
+    if len(a) == len(b):
+        return a[i + 1:] == b[i + 1:]
+    return a[i:] == b[i + 1:]
+
+
+def coherence(text, identifier):
+    """Share of the comment's words already present in the identifier's name."""
+    words = words_of(text)
+    if not words:
+        return None
+    parts = split_identifier(identifier)
+    hit = sum(1 for w in words if any(_within_one_edit(w, p) for p in parts))
+    return hit / len(words)
+
+
+def declarations_python(text):
+    """Line number of each class/function declaration mapped to its bare name."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {}
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[node.lineno] = node.name
+    return out
+
+
+# Two declaration shapes cover the brace languages this module reads: a
+# keyword form (`function f`, `class C`, `func F`, `fn f`, `struct S`) and the
+# C/Java/C# typed form (`static int read_block(`). A bare `name(` is excluded
+# on purpose -- that is a call site, and treating it as a declaration would
+# attach every comment above a call to the callee's name.
+_KEYWORD_DECL = re.compile(
+    r"^[^\S\n]*(?:[\w@$]+[^\S\n]+)*?"
+    r"(?:function|func|fn|class|struct|interface|type|enum|protocol)"
+    r"[^\S\n]+([A-Za-z_$][\w$]*)")
+_TYPED_DECL = re.compile(
+    r"^[^\S\n]*(?:[\w.<>\[\]*&$]+[^\S\n]+)+([A-Za-z_$][\w$]*)[^\S\n]*\(")
+_NOT_A_DECL = frozenset({
+    "if", "for", "while", "switch", "catch", "return", "else", "do", "with",
+})
+
+
+def declarations_brace(text):
+    out = {}
+    for number, line in enumerate(text.splitlines(), start=1):
+        match = _KEYWORD_DECL.match(line) or _TYPED_DECL.match(line)
+        if not match:
+            continue
+        name = match.group(1)
+        head = line.strip().split("(")[0].split()
+        if name in _NOT_A_DECL or (head and head[0] in _NOT_A_DECL):
+            continue
+        out[number] = name
+    return out
+
+
+def declarations(text, ext):
+    """Declaration line -> name, for whichever reader covers `ext`."""
+    if ext == ".py":
+        return declarations_python(text)
+    if ext in BRACE_EXT:
+        return declarations_brace(text)
+    return {}
