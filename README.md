@@ -3,7 +3,8 @@
 A repository that grows past what a model can hold in its own attention degrades in a specific,
 measurable way: functions too long to read in one pass, files too big to fit in context, parameter
 lists that hide an implicit object, nesting that forces the agent to hold a stack of conditions in
-mind, copy-pasted logic that drifts, import cycles, dead code, and files that keep changing anyway.
+mind, copy-pasted logic that drifts, import cycles, dead code, comments that restate the code beside
+them instead of explaining it, and files that keep changing anyway.
 This plugin measures that, writes it down, fixes it, and then stops it from coming back. Three
 verbs over one debt ledger and one ratchet:
 
@@ -33,7 +34,8 @@ Codex reads the same repository through [`.agents/plugins/marketplace.json`](.ag
 ### `audit`
 
 - Runs local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import
-  cycles, dead code, churn) plus an optional SonarQube layer, without changing the repository.
+  cycles, dead code, churn, comment noise) plus an optional SonarQube layer, without changing the
+  repository.
 - Marks every layer that could not run as `not measured`, with a reason, instead of dropping it
   silently — a Sonar-less audit says so rather than implying a clean bill of health.
 - Writes a debt ledger, grouped and prioritized (`A1`, `A2`, …), that a `fix` session can resolve.
@@ -59,7 +61,7 @@ Codex reads the same repository through [`.agents/plugins/marketplace.json`](.ag
 | Layer | Tools | Produces | Used by |
 |---|---|---|---|
 | L1 Sonar | a dedicated quality profile forked from `Sonar way` | reliability, security, coverage, maintainability rating, cognitive complexity | `audit` only — **optional** |
-| L2 local | `lizard`, `jscpd`, `madge`, `vulture`, `git`, a Python AST pass, direct file reads | size, token cost, cyclomatic complexity, parameters, nesting, exact and near-duplicate clones, import cycles, dead code, churn | all three — **the only layer `guard` uses** |
+| L2 local | `lizard`, `jscpd`, `madge`, `vulture`, `git`, a Python AST pass, `tokenize` and a brace-comment scanner, direct file reads | size, token cost, cyclomatic complexity, parameters, nesting, exact and near-duplicate clones, import cycles, dead code, comment noise, churn | all three — **the only layer `guard` uses** |
 | L3 derived | this plugin's own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` only |
 
 **L1 is optional.** Without Docker, the Sonar layer reports `not measured` with a stated reason and

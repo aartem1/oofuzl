@@ -73,6 +73,7 @@ written down.
 | `near_duplicate`, `exact_clone` | `dup` |
 | `import_cycle` | `imports` |
 | `dead_symbol` | `dead` |
+| `comment_noise` | `comments` |
 | `hotspot`, `symbol_collision`, `edit_fanout` | `derived` |
 
 Pass the values for every kind in the group, comma-separated. Dependencies resolve transitively —
@@ -91,6 +92,7 @@ configuration.
 | `near_duplicate` | L2, own MinHash/LSH pass (no external tool); config: `near_duplicate.min_similarity` (default 0.60), `near_duplicate.min_tokens` (default 40) | A cluster of functions that are not token-identical (which `jscpd`/CPD would catch) but share almost all their structure, typically with renamed identifiers or different string constants | The agent fixes a bug in one of N copies and ships a fix that silently does not apply to the other N-1; a duplicate the agent cannot see is a duplicate it cannot keep in sync. |
 | `import_cycle` | L2, Python `ast` pass (exact) or `madge --json` for JS/TS | An import cycle: module A imports B which (directly or transitively) imports A again | A cycle means there is no safe order to read the modules in isolation — understanding either one requires already understanding the other — and it is exactly the shape that produces circular-import runtime errors when an agent reorganizes imports without noticing the cycle. |
 | `dead_symbol` | L2, `vulture` (Python, `--min-confidence 80`); **JS/TS is `not_measured`** — knip's JSON output is not parsed (`<plugin-root>/references/tools.md`) | A function, class, or export with no detected reference elsewhere in the repository | Dead code is a false trail: the agent reads it, assumes it matters because it is in the codebase, and spends budget understanding something nothing calls. Both tools have known false positives on dynamic dispatch, so a finding here is evidence to inspect, not a certainty — grouped by owning module/package and capped at `P2` for that reason (`<plugin-root>/references/quality-policy.md`). |
+| `comment_noise` | L2, own reader (no external tool): `tokenize` + `ast` for Python, an own brace-comment scanner for brace languages | A comment counted into `noise_comment_lines`: `commented_out` (Python only, code left behind in a comment) or `trivial_doc` (a docstring or line comment that restates the identifier it sits on). `short_inline` is a third detected class, reported in `evidence` only and never counted — its measured precision is 0.70, below the 0.85 floor a counted class must clear (this plugin's own rule, stated in `<plugin-root>/references/quality-policy.md`) | Every line of a comment that repeats the code beside it is context the next agent pays for and learns nothing from — unlike a long function, it teaches nothing in exchange for the tokens it costs. Precision: see "Where `comment_noise`'s precision figures come from" below — the literature's ~0.89/~0.90 is the algorithm's ancestry, not a measurement of this implementation. A `comment_noise` group is capped at `P2` for the same reason `dead_symbol` is (`<plugin-root>/references/quality-policy.md`). |
 | `hotspot` | L3, derived from L2 size + churn | `commits_in_window × sum(ccn of functions in file)`, reported with both percentile ranks | Tornhill's product: complex code nobody touches is not urgent, but the same complexity in a file changed 40 times in the churn window is the highest-risk place in the repository for an agent to be asked to change something. Never its own group — it re-ranks other groups (`<plugin-root>/references/quality-policy.md`). |
 | `symbol_collision` | L3, derived from the **Python `ast` pass only** (`imports.symbols`: classes and functions defined in `inventory.source`, tests excluded, minus a short convention-name list — `__init__`, `main`, `setUp`, `tearDown`, `__str__`, `__repr__`); config: `collision_min_files` (default 3) | A symbol name defined in `collision_min_files` or more distinct files, ranked by `count × avg_definition_tokens`. **Not measured for a repository with no Python**: `imports` reports `not_measured` there and `derived.symbol_collisions` comes back `null` with `derived.status: partial`, never an empty list. lizard's function rows are *not* a second source — they were never fed into this table | The agent greps a name, gets N hits across files, and has to disambiguate which definition is actually in scope for the call site it is editing — silently picking the wrong one is a correctness bug the agent will not notice it made. Never its own group. |
 | `edit_fanout` | L3, derived from L2 churn | `mean(other files in commits touching f)` divided by the repository-wide **median** other-files-per-commit, falling back to the **mean** when that median is `0`; the denominator actually used is reported as `edit_fanout_basis` (`median` / `mean` / `unavailable`) — a ratio, not a raw count. A ratio that cannot be computed at all is `null`, never `0.0` | The raw co-change count is dominated by the repository's own commit-size habits rather than by the file; the ratio isolates the file. `> 1` means an edit here routinely drags in more files than a typical commit does — the file is coupled to more of the codebase than its own size suggests. Never its own group. |
@@ -99,3 +101,49 @@ configuration.
 `<plugin-root>/references/quality-policy.md`: they never form their own ledger group. They re-rank
 the groups the size/duplication/import/dead-code metrics above already produced, and they appear as
 evidence inside that group's `why`.
+
+### Where `comment_noise`'s precision figures come from
+
+Three numbers circulate for this metric and they answer three different questions. Quoting one for
+another is the mistake this section exists to prevent.
+
+**The literature's ~0.89 / ~0.90 is ancestry, not a measurement of what ships.** Steidl et al.
+(ICPC 2013) report ~0.90 for coherence-based trivial-comment detection and ~0.89 for the
+commented-out-code feature, the second corroborated by a 16-developer survey over 30 examples.
+This implementation descends from those algorithms and does not reproduce them: the `any()` rule
+was replaced by a majority rule, Steidl's `0.1` was rejected as untransferable (it was tuned as one
+input feature to a trained classifier, never validated as a standalone decision rule), and the four
+post-parse discriminators are this plugin's own. Cite the figures for where the method came from.
+
+**This branch's own live-code result** — 15,318 source files in three real repositories, every
+flagged line read at its own line with its surrounding code:
+
+| Class | Flagged | Judged |
+|---|---|---|
+| `commented_out` | 11 lines | 11 true positives, 0 false. Two deprecated annotations with `@deprecated` notes, two commented-out call statements, one seven-line commented-out block. Each line individually inspected at its source context. |
+| `trivial_doc` | 31 lines (28 records) | 13 unambiguous restatements; 14 section headers (below); 4 false positives, all scoring 0.55–0.75 — comments whose extra clause carries what the identifier does not. |
+
+Eleven positives is a small numerator. It supports "no false positive was found in this sample",
+not a confident percentage, and no percentage is quoted from it.
+
+**Known characteristic — the section header is `trivial_doc`'s dominant live shape.** 14 of the 31
+flagged lines are a one- or two-word comment marking the start of a block of related declarations in
+a types or DTO file: `// Filters` over `export interface FiltersState`, `// Sync` over
+`export interface SyncError`, `# Education` over `class EducationLevelDTO`. Each scores 0.67 to
+1.00, because a section header is by construction the name of the first thing under it. They
+satisfy the detector's definition and are not a defect in it, but they are navigation for a human
+reading top to bottom rather than documentation of one declaration. Read the live precision as
+**27/31** under the detector's own definition and **13/31** if section headers count as worth
+keeping; both readings belong in a report, and a `fix` session treats a section header as a
+judgement call, never an automatic deletion.
+
+**The corpus is a regression pin.** `tests/comment_corpus.py` scores 1.00 on both counted classes.
+That number is never published as a precision: it was written alongside the detectors by their own
+author, over fixtures the same author chose because the answer was already known.
+
+**Why there is no `warn`/`hard`.** The same calibration measured the distribution: over 15,318
+files, p50, p75, p90, p95 and p99 are all `0`, with a maximum of 7. `warn = p90 / hard = p99`
+would set both to zero and flag every file carrying one noise line. A rare-event distribution has
+no meaningful cut, so the metric lives in the "Metrics outside `config.thresholds`" table above
+with `dead_symbol` — fixed `level: "warn"`, `threshold: null`, capped at `P2` — rather than
+carrying an invented threshold.

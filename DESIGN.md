@@ -50,7 +50,7 @@ Four things Sonar cannot do at any setting, and which this plugin therefore owns
 | Layer | Tools | Produces | Consumers |
 |---|---|---|---|
 | **L1 Sonar** | own quality profile (fork of `Sonar way` + S138/S104/S134/S107) | rules, history, quality gate, cognitive complexity, reliability/security findings, coverage, hotspots | `audit` only; **optional** — no Docker ⇒ layer marked `not_measured`, audit continues |
-| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
+| **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, own comment reader (`tokenize`, `ast`, a brace-comment scanner; no external tool), direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, comment noise, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
 | **L3 derived** | own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` |
 
 Every layer is always present in the output with an explicit
@@ -147,6 +147,7 @@ belongs to the `audit` skill, not to the measurer.
 | `dead` | file enumeration | `dead_symbol` (Python only; see "L2 — dead code") |
 | `churn` | git history | — (feeds `derived`) |
 | `derived` | `size` + `churn` + `imports` | `hotspot`, `symbol_collision`, `edit_fanout` |
+| `comments` | file enumeration | `comment_noise` (see "L2 — comments") |
 
 A requested layer whose dependency is unavailable is `not_measured` with the dependency named as
 the reason, not silently empty. `derived` reads the symbol table out of `imports`, which is why
@@ -236,7 +237,10 @@ just is not the same problem.
     "dead":    { "status": "not_measured", "reason": "vulture unavailable" },
     "churn":   { "status": "measured",     "window_days": 180, "history_span_days": 412, "files": [...] },
     "derived": { "status": "measured",     "hotspots": [...], "symbol_collisions": [...],
-                 "edit_fanout": [...] }
+                 "edit_fanout": [...] },
+    "comments":{ "status": "partial",      "languages_measured": ["brace"],
+                 "reason": "3 file(s) have no comment reader for their extension; commented_out is Python-only and this repository has no measured Python file",
+                 "not_measured_files": 3, "files": [...] }
   },
   "findings": [
     { "id": "file_too_long:backend/reports.py",
@@ -370,7 +374,10 @@ This is the pass that catches what CPD misses.
 
 The headline number reported to the user is the **lexical** similarity, comparable to the "64–75 %
 pairwise" figure that motivated this pass. Known limitation, stated in the report: comments are not
-stripped, so heavily commented near-identical code scores lower than its logic warrants.
+stripped, so heavily commented near-identical code scores lower than its logic warrants. A comment
+reader now exists in this repository (`scripts/code_health/comments.py`, §5) that could strip them
+before tokenizing; noted here as a possibility, not implemented — this pass still tokenizes raw
+source, comments included.
 
 ### L2 — import graph
 
@@ -398,6 +405,135 @@ fixed for vulture: a confident "no dead code in JS/TS" produced by parsing nothi
 verified parser here for knip's JSON reporter, so the layer reports `not_measured` with that as the
 reason and knip is not run at all, rather than paying a 900-second subprocess for a result nobody
 reads. Shipping an unverified parser would restore the same claim one level down.
+
+### L2 — comments
+
+Own reader, no external tool: `scripts/code_health/comments.py`. Three detectors —
+`commented_out`, `trivial_doc`, `short_inline` — feed one metric, `noise_comment_lines`; only the
+first two are summed into it. Folding `short_inline` in as well would give the whole metric the
+precision of its weakest class, the same reason CCN and cognitive complexity are reported under
+separate names rather than blended into one number.
+
+**Two immunity passes, not one.** `is_directive` covers eradicate's own whitelist — tool directives
+(`noqa`, `type: ignore`, `eslint-disable`, `pylint`, `pyright`, `nosec`, `fmt:`, `isort:`,
+`NOSONAR`, `go:generate`, `ruff:`, `mypy:`), task tags (`TODO`/`FIXME`/`XXX`/`HACK`),
+licence/copyright text, issue references and URLs, shebang and coding declarations — and gates
+every detector, `commented_out` included. `is_prose_immune` covers the 30-word rule, reason words
+(`because`/`workaround`/`otherwise` and their Russian equivalents), units and epoch/index
+conventions, range-bound wording, null-value wording, and ownership/lifetime verbs — and gates only
+the two prose detectors (`trivial_doc`, `short_inline`). The split exists because a commented-out
+`# return None` was being spared by the null-value pattern under one combined list: commented-out
+code is code, not documentation of null semantics, and only the directive list may excuse it.
+`empty` and `closes` were dropped from the ownership/lifetime wording — both are ordinary verbs
+that appear in exactly the restating comments this metric targets ("empty the cache", "closes the
+file" over `f.close()`), not markers of genuine ownership documentation. Three of the directive
+alternatives — the issue-key pattern, `None`, `SPDX` — are matched case-sensitively inside an
+otherwise case-insensitive pass, because case-insensitively they matched `utf-8` and `python-3` as
+issue keys.
+
+**`commented_out` (Python only) is a majority rule, not "any line."** More than half of a
+comment's non-empty lines must read as code — the earlier any-line rule flagged a fifteen-line
+prose docstring in this plugin's own `pyast.py` as commented-out code, because the docstring's one
+worked example contains `else:`. The pipeline's last step, ported from eradicate, is a real parse
+— `ast.parse`, not `compile`, which is what the module calls; a successful parse is now also
+rejected when the result is a single bare expression containing no call, because a `#` inside
+comment text truncates the line handed to the parser — this plugin's own comment ending
+`C/Java/C# typed form (…)` parsed as the valid expression `C/Java/C`. Accepted cost: genuinely commented-out code shaped `x[1]` or `x % y` is now
+missed too. Steidl's published `0.1` figure is not used anywhere in this module: it was tuned as
+one input feature to a trained classifier in the source paper, not validated as a standalone
+decision rule, and reusing it here would publish a number this repository never checked itself.
+
+**`trivial_doc`'s inexact word match requires both words to be at least two characters.** Below
+that length every distinct character pair sits one edit apart, so `coherence("и а к", "a_b_c")`
+scored a perfect `1.0` before the floor was added. Exact equality still matches at any length.
+
+**Languages.** `commented_out` is Python-only — a brace-language verdict needs its own verified
+parser, the same precedent as `symbol_collision` and `dead_symbol` above. For a brace language its
+evidence field is `null`, never an empty list: an empty list would read as "checked, found
+nothing" for a class nobody checked there. A repository with **no** measured Python file therefore
+reports the whole layer as `partial`, with `commented_out is Python-only` named as the reason —
+the same per-metric rule `derived.symbol_collisions` obeys, applied here: a layer cannot announce
+`measured` for a metric one of whose two counted classes never ran. `trivial_doc` and
+`short_inline` run for Python and for
+the brace languages whose **declarations** a per-extension probe resolves — not for every language
+whose comments the scanner can read. Both halves are required: a file whose comments are read but
+whose declarations are invisible reports `trivial_doc: 0` on every file, which is the same silent
+zero as lizard's nesting column one level down. The probe feeds one realistic declaration per
+extension and `BRACE_EXT` keeps only the extensions that pass; it found C++ out-of-line member
+definitions (`int Cache::load_all(int fd) {`) invisible, which was fixed, and Objective-C's
+`- (void)loadAll:(int)x {` unmatched by any of the three declaration shapes, which removed `.m` and
+`.mm` from the set. Objective-C, Objective-C++, Ruby, PHP and Lua are `not_measured` and named as
+such. The full table, the two removals and the known recall gaps inside a passing language are in
+`references/tools.md`; the probe ships as `BraceLanguageProbeTests`, which also asserts that no
+extension can join `BRACE_EXT` without a passing probe row.
+
+**`short_inline` is evidence-only.** Measured at ~0.70 precision, below the 0.85 floor a counted
+class must clear — this repository's own rule, stated in `references/quality-policy.md`, not a
+figure inherited from anywhere. Never summed into `noise_comment_lines` and never its own group,
+but free to report once `fix` already has the file open.
+
+**Three precision numbers, three standards of evidence, not interchangeable.**
+
+*Ancestry, not measurement.* Steidl et al. (ICPC 2013) report ~0.90 for coherence-based trivial
+comment detection and ~0.89 for the commented-out-code feature, the second corroborated by a
+16-developer survey over 30 examples. Those figures describe the algorithms this layer **descends
+from**. They do not describe what ships here, and this document says so three paragraphs above:
+the decision rule is deliberately not Steidl's — the `any()` rule was replaced by a majority rule,
+Steidl's `0.1` was rejected as untransferable, and the four post-parse discriminators are this
+repository's own. Cite them for where the method came from; never as a measurement of this
+implementation.
+
+*This branch's own live-code result.* 15,318 source files across three real repositories, every
+flagged line read at its own line with its surrounding code:
+
+- `commented_out`: **11 flagged lines, 11 true positives** — two deprecated annotations carrying
+  `@deprecated` notes, two commented-out `put_oauth_error_state(...)` calls, and one seven-line
+  commented-out `check_employer_has_service(...)` block closed by a `tempexp_..._end` marker. Each
+  line was individually inspected at its source context. Eleven positives is a small numerator: it
+  supports "no false positive was found in this sample", not a confident percentage, and no
+  percentage is quoted from it.
+- `trivial_doc`: **31 flagged lines in 28 comment records.** 13 lines are unambiguous restatements
+  (`"""Escape HTML entities."""` over `escape_html`, `"""Jira API error."""` over `class
+  JiraAPIError`). 14 lines are the shape below, a **section header**. 4 lines are false positives —
+  comments whose extra clause carries the information the identifier lacks, all four scoring
+  0.55–0.75, just over the 0.5 bar: `"""Map teams.name -> str(id) (developer_tasks.team is a
+  name)."""` over `_team_name_to_id`, `# получаем list[str] из list[{ string: str }]` over
+  `get_resume_list_str_value`, `# chatik deep link params` over `get_deep_link_query_params`, and
+  `"""Re-synthesize external presence into hr_employee_presence (replace)."""` over
+  `synthesize_and_replace_external_presence`.
+
+**Known characteristic: the section header is `trivial_doc`'s dominant live shape.** 14 of the 31
+flagged lines are a one- or two-word comment marking the start of a block of related declarations
+in a types or DTO file — `// Filters` over `export interface FiltersState`, `// Sync` over
+`export interface SyncError`, `# Education` over `class EducationLevelDTO`. Every one scores 0.67
+to 1.00, because a section header is by construction the name of the first thing under it. They
+satisfy the detector's definition exactly and are not a bug in it, but they are navigation for a
+human reading the file top to bottom rather than documentation of one declaration, and a `fix`
+session should treat them as a judgement call rather than a deletion. Read the class's live
+precision as 27/31 under the detector's own definition and 13/31 if section headers are counted as
+worth keeping; the honest report gives both and names the shape, which is why the class is capped
+at `P2` and its findings are evidence to inspect.
+
+*The corpus.* `tests/comment_corpus.py` scores 1.00 on both counted classes and that number is
+never published as a precision: it is a regression pin written alongside the detectors by their
+own author, over fixtures the same author chose because the answer was already known.
+
+**`noise_comment_lines` has no `warn`/`hard`, and calibration is what settled that.** The
+calibration ran over the same 15,318 files: p50, p75, p90, p95 and p99 are all `0`, with a maximum
+of 7. That is a rare-event distribution, not one with a meaningful cut — the plan's
+`warn = p90 / hard = p99` method would have set both to zero, flagging every file carrying a
+single noise line. Rather than invent a number the data does not contain, the metric sits in
+`references/metrics.md`'s "Metrics outside `config.thresholds`" table alongside `dead_symbol`, its
+exact analogue: per-occurrence, known false positives, fixed `level: "warn"`, `threshold: null`,
+capped at `P2`. There is no `config.thresholds` key for it and there never will be.
+
+**What this layer does not catch.** A comment that paraphrases its code in different words —
+`// loop through items` over `for item in items:` — shares no lexical overlap with it under
+coherence and goes undetected. Catching it needs an entailment model (Louis et al., 2018), which
+this layer deliberately does not run — the same kind of stated gap as nesting for Ruby/Lua and
+dead code for JS/TS above.
+
+Grouping and priority are decided in §8 and `references/quality-policy.md`, not here.
 
 ### L2 — churn
 
@@ -592,11 +728,20 @@ actual write to the profile is announced in the report (§12).
 | `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
 | `dead_symbol` | the owning module or package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
 | Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
+| `comment_noise` | subsystem/directory | "31 files carrying commented-out code under `legacy/`" — capped at `P2` |
 | `hotspot`, `edit_fanout`, `symbol_collision` | never their own group — they **re-rank** other groups and appear as evidence in `why` | — |
 
 Sonar issues are in the table because they need a grouping rule as much as the L2 kinds do and the
 audit skill had to invent one in its absence. How a re-ranking finding is nevertheless *referenced*
 by a group — never creating one — is stated in `references/ledger.md`.
+
+A `comment_noise` finding's `evidence.zero_coherence` lists comments that share no word with the
+function they document. That is not a finding of its own and never becomes a group: when the
+function also carries a `function_too_complex`, `function_too_long`, or `too_deep_nesting` finding,
+name the comment in that group's `why` as evidence — the code needed prose to be understood, which
+is the group's own argument. When the function carries no other finding, ignore the entry. Same
+rule already in force for `hotspot`, `edit_fanout`, and `symbol_collision`: a group made only of
+re-ranking findings is forbidden (`references/ledger.md`, "Re-ranking findings").
 
 **Parameter-set clustering** for `too_many_params`, since lizard gives only a count and a
 `long_name` string: the Python `ast` pass emits each function's ordered parameter-name tuple;
@@ -740,6 +885,14 @@ Applied to each group's diff before its commit. Any hit ⇒ reject: edits stay u
    replacement.
 5. Repo-wide `summary` did not improve consistently with the local metric — code moved somewhere
    the measurer no longer looks. Compared against `queue.baseline_summary`.
+6. Comment lines deleted outside the protected set, for a `comment_noise`, `file_too_long` or
+   `file_too_expensive` group. Deleting comments lowers `file_lines` and `file_tokens`, so rule 5
+   reads the deletion as an improvement and confirms it; the two size groups are where that pays
+   best. The protected set is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines` from
+   every `comment_noise` finding on the file — `null` means the class never ran (`commented_out` is
+   Python-only) and grants nothing; the numbers are **old-side**, from the pre-fix measurement; and
+   a deleted comment line is not decided by a `#`/`//` prefix, because the detector counts
+   docstring lines and `/* */` interiors too. `skills/fix/SKILL.md` carries the operative text.
 
 **The false-positive exception, restored from v0.2.0.** Rule 3 is not absolute. A suppression is
 permitted when the finding is demonstrably a false positive *and* the user explicitly approves it
@@ -1055,7 +1208,7 @@ first. `SKILL.md` files are instructions and get skill validation.
 | ratchet | existing file grows → fail; shrinks → pass; new file under `warn` → pass, over `warn` → fail; new function over `warn` in an old file → fail; renamed function treated as new; threshold lowered in config tightens immediately |
 | guard performance | 20 changed files within the budget |
 | gate detection | `config.gate` wins over `make gate`; each of the five remaining sources; the ask fallback |
-| anti-gaming | each of the five rules triggers on a crafted diff, including a diff touching `.pre-commit-config.yaml` |
+| anti-gaming | each of the six rules triggers on a crafted diff, including a diff touching `.pre-commit-config.yaml`, and one deleting an unflagged docstring under a `file_too_long` group |
 
 Fixtures are small synthetic repositories built in a temp directory, never checked-in copies of real
 code. Tests needing `lizard` skip cleanly when it is absent, so the suite runs anywhere.

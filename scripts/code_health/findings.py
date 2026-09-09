@@ -9,7 +9,7 @@ from . import config as _config
 # three numbers a rule check produces together, always used together.
 Measurement = namedtuple("Measurement", "metric value threshold")
 
-LAYER_NAMES = ("size", "dup", "imports", "dead", "churn", "derived")
+LAYER_NAMES = ("size", "dup", "imports", "dead", "churn", "derived", "comments")
 # `derived` reads `imports_layer["symbols"]` for symbol collisions, so
 # `imports` is a real dependency and not declaring it made
 # `measure.py --layers derived` yield no collisions at all -- which is
@@ -31,6 +31,9 @@ LAYER_TOOLS = {
     "dead": ("vulture",),
     "churn": (),
     "derived": (),
+    # `comments` reads files with the stdlib (`tokenize`, `ast`, and its own
+    # brace scanner) and calls no external tool.
+    "comments": (),
 }
 
 
@@ -241,6 +244,32 @@ def dead_findings(layer):
             "metric": "dead_symbol", "value": row.get("confidence"),
             "threshold": None,
             "evidence": {"message": row.get("message"), "tool": row.get("tool")},
+        })
+    out.sort(key=lambda f: f["id"])
+    return out
+
+
+def comment_findings(layer):
+    """`comment_noise` findings from the comments layer.
+
+    No `cfg` argument: `comment_noise` is not in `config.thresholds` -- the
+    calibration run found p50 through p99 all at 0 (max 7) across 15,318
+    files in three real repositories, so there is no cut to read. Fixed
+    `level: "warn"` and `threshold: None`, same shape as `dead_findings`:
+    both are per-occurrence findings with known false positives, capped at
+    P2 (`references/quality-policy.md`).
+    """
+    out = []
+    for row in layer.get("files", []):
+        value = row.get("noise_comment_lines")
+        if value is None or value <= 0:
+            continue
+        out.append({
+            "id": "comment_noise:%s" % row["path"],
+            "kind": "comment_noise", "layer": "L2", "level": "warn",
+            "subject": {"file": row["path"]},
+            "metric": "noise_comment_lines", "value": value, "threshold": None,
+            "evidence": row.get("evidence"),
         })
     out.sort(key=lambda f: f["id"])
     return out

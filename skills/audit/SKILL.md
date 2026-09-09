@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
+description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn, comment noise) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
 compatibility: Requires local shell access. lizard is installed automatically; Docker is optional and only enables the Sonar layer. Designed for Claude Code and Codex-compatible Agent Skills.
 ---
 
@@ -105,6 +105,7 @@ missing rows imply the repository has no issues there:
 | Maintainability rating / debt | `not measured` |
 | Cognitive complexity | `not measured`; CCN (from L2 `lizard`) reported instead, labelled as such |
 | Complexity (CCN), Size, Token cost, Duplication, Churn | measured (L2/L3) |
+| Comment noise | measured (L2), independent of Sonar — but it has its own `not_measured` case; read `layers.comments.status`, step 10 |
 
 **Consequence, said plainly, not implied:** a Sonar-less audit can **structurally never raise a
 P0** — the P0 tier is defined by correctness/security evidence that only L1 produces. Say this in
@@ -190,7 +191,19 @@ for priority and grouping judgment, plus this mapping (DESIGN §8):
 | `import_cycle` | one group per cycle | "3-module cycle between reports, cache, and models" |
 | `dead_symbol` | the owning module/package, never repo-wide | "24 unreferenced helpers in `legacy/`" — capped at `P2` |
 | Sonar reliability/security issues | rule + subsystem | "3 blocker null-deref issues in the payment module" |
+| `comment_noise` | subsystem/directory | "31 files carrying commented-out code under `legacy/`" — capped at `P2` |
 | `hotspot`, `edit_fanout`, `symbol_collision` | **never their own group** | they re-rank the groups above and appear as evidence inside that group's `why` |
+
+A `comment_noise` finding's `evidence.zero_coherence` lists comments that share
+no word with the function they document. That is not a finding of its own and
+never becomes a group. When such a function also carries a
+`function_too_complex`, `function_too_long` or `too_deep_nesting` finding, name
+the comment in that group's `why` as evidence: the code needed prose to be
+understood, which is the group's own argument. When the function carries no
+other finding, ignore the entry. This is the same rule already in force for
+`hotspot`, `edit_fanout` and `symbol_collision`: a group made only of
+re-ranking findings is forbidden (`<plugin-root>/references/ledger.md`,
+"Re-ranking findings").
 
 **Parameter-set clustering** for `too_many_params`: `measure.py`'s Python `ast` pass emits each
 function's ordered parameter-name tuple; group functions by Jaccard ≥ 0.6 over their parameter-name
@@ -256,9 +269,23 @@ back to the old budget, that just drops one of those silently.
    status (if L1 ran), analyzed revision/time, and whether Sonar was reused or freshly scanned.
    When `L1: not_measured`/`partial`, say so with the reason here, not only in the Scorecard.
 3. **Scorecard** — Reliability, Security, Maintainability, Complexity, Duplication, Coverage, plus
-   the new **Size**, **Token cost**, **Churn** rows. Every row carries a plain-language status and
-   an explicit `measured` / `not measured` tag; use the step-3 table for what to write when
-   `not measured`.
+   the new **Size**, **Token cost**, **Churn** and **Comment noise** rows. Every row carries a
+   plain-language status and an explicit `measured` / `not measured` tag; use the step-3 table for
+   what to write when `not measured`.
+
+   **The Comment noise row** reads `layers.comments.status` and never softens it:
+   - `measured` — total `noise_comment_lines` and how many files carry any.
+   - `partial` — the same numbers, plus the layer's `reason` and `not_measured_files` verbatim.
+     Two causes are common and mean different things: files whose extension has no comment reader
+     (Ruby, PHP, Lua, Objective-C — `<plugin-root>/references/tools.md`), and a repository with no
+     measured Python file, where the `commented_out` class never ran at all and every file's
+     `evidence.commented_out` is `null`.
+   - `not_measured` — say so with the reason. A repository written entirely in a language with no
+     reader here produces this, and the honest row is "not measured", never "no comment noise
+     found".
+
+   A `0` from a `not_measured` layer, and a `null` `evidence.commented_out`, are never reported as
+   "clean" — that is the same defect this skill refuses for coverage and for JS/TS dead code.
 4. **Fix first** — at most five grouped priorities, labelled `A1`, `A2`, ... . For each: `P0`
    /`P1`/`P2`/`P3`; short problem name; why it matters (including any hotspot/fan-out/collision
    evidence that moved its priority); approximate scope (issue count/files/modules); recommended
