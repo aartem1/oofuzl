@@ -878,6 +878,44 @@ class LayerTests(unittest.TestCase):
         self.assertIn("reader", layer["reason"])
         self.assertEqual(layer["files"], [])
 
+    def test_a_brace_only_repository_is_partial_with_the_dependency_named(self):
+        """`commented_out` is Python-only, so it never ran here.
+
+        The per-file evidence is already `null` rather than an empty list;
+        DESIGN.md's own rule -- "a metric computed from a layer that is not
+        measured and coming out empty is reported as null and its own layer
+        drops to partial with the dependency named" -- applies per metric,
+        so the layer cannot announce `measured` for a half-measured one.
+        """
+        self._write("a.ts", "// x = 1;\nlet y = 2;\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.ts"]), self.cfg)
+        self.assertEqual(layer["status"], "partial")
+        self.assertIn("commented_out", layer["reason"])
+        self.assertEqual(layer["not_measured_files"], 0)
+        self.assertIsNone(layer["files"][0]["evidence"]["commented_out"])
+
+    def test_one_python_file_is_enough_to_make_the_layer_measured(self):
+        self._write("a.ts", "let y = 2;\n")
+        self._write("b.py", "x = 1\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.ts", "b.py"]), self.cfg)
+        self.assertEqual(layer["status"], "measured")
+        self.assertIsNone(layer["reason"])
+
+    def test_each_not_measured_cause_is_named_separately(self):
+        # One reason string for all three told a reader that a `.rb` file, a
+        # file the process cannot open, and a file using newer syntax were
+        # the same problem.
+        self._write("a.py", "x = 1\n")
+        self._write("b.lua", "-- x\n")
+        self._write("c.py", "x = = 1\n")
+        layer = CM.measure_comments(
+            self.root, _Inventory(["a.py", "b.lua", "c.py", "gone.py"]), self.cfg)
+        self.assertEqual(layer["status"], "partial")
+        self.assertEqual(layer["not_measured_files"], 3)
+        self.assertIn("no comment reader for their extension", layer["reason"])
+        self.assertIn("could not be read from disk", layer["reason"])
+        self.assertIn("do not parse", layer["reason"])
+
     def test_languages_measured_is_reported(self):
         self._write("a.py", "x = 1\n")
         self._write("b.ts", "let x = 1;\n")

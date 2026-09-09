@@ -446,7 +446,11 @@ scored a perfect `1.0` before the floor was added. Exact equality still matches 
 **Languages.** `commented_out` is Python-only — a brace-language verdict needs its own verified
 parser, the same precedent as `symbol_collision` and `dead_symbol` above. For a brace language its
 evidence field is `null`, never an empty list: an empty list would read as "checked, found
-nothing" for a class nobody checked there. `trivial_doc` and `short_inline` run for Python and for
+nothing" for a class nobody checked there. A repository with **no** measured Python file therefore
+reports the whole layer as `partial`, with `commented_out is Python-only` named as the reason —
+the same per-metric rule `derived.symbol_collisions` obeys, applied here: a layer cannot announce
+`measured` for a metric one of whose two counted classes never ran. `trivial_doc` and
+`short_inline` run for Python and for
 the brace languages whose **declarations** a per-extension probe resolves — not for every language
 whose comments the scanner can read. Both halves are required: a file whose comments are read but
 whose declarations are invisible reports `trivial_doc: 0` on every file, which is the same silent

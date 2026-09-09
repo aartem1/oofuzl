@@ -680,33 +680,57 @@ def classify_file(text, ext, chars_per_token=4):
 
 def measure_comments(repo_root, inventory, cfg):
     """The layers.comments object. Always returns a status; never raises."""
-    rows, langs, unread = [], set(), 0
+    rows, langs = [], set()
+    # Three unrelated causes, counted apart. One "no verified comment reader"
+    # for all three told a reader that a `.rb` file, a file the process cannot
+    # open, and a file using syntax newer than the interpreter were the same
+    # problem -- only the first is about this module's language coverage, and
+    # only the first is unfixable by the person reading the report.
+    no_reader, unreadable, unparsed = 0, 0, 0
     chars_per_token = cfg["chars_per_token"]
     for rel in inventory.source:
         ext = os.path.splitext(rel)[1].lower()
         if ext != ".py" and ext not in BRACE_EXT:
-            unread += 1
+            no_reader += 1
             continue
         try:
             text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
-            unread += 1
+            unreadable += 1
             continue
         got = classify_file(text, ext, chars_per_token)
         if got is None:
-            unread += 1
+            unparsed += 1
             continue
         langs.add("python" if ext == ".py" else "brace")
         rows.append(dict(path=rel, **got))
 
+    reasons = []
+    if no_reader:
+        reasons.append("%d file(s) have no comment reader for their extension"
+                       % no_reader)
+    if unreadable:
+        reasons.append("%d file(s) could not be read from disk" % unreadable)
+    if unparsed:
+        reasons.append("%d Python file(s) do not parse" % unparsed)
+    # `commented_out` is Python-only, so a repository with no measured Python
+    # file has one of the two counted classes unrun. Its per-file evidence is
+    # already `null` rather than an empty list; the layer must say so too.
+    # DESIGN.md §5: "The rule is per metric, not only per layer... a metric
+    # computed from a layer that is not `measured` and coming out empty is
+    # reported as `null` and its own layer drops to `partial` with the
+    # dependency named." `derived.symbol_collisions` already obeys it.
+    if rows and "python" not in langs:
+        reasons.append("commented_out is Python-only and this repository has "
+                       "no measured Python file")
+
     layer = {"files": rows, "languages_measured": sorted(langs),
-             "not_measured_files": unread, "reason": None}
+             "not_measured_files": no_reader + unreadable + unparsed,
+             "reason": "; ".join(reasons) or None}
     if not rows:
         layer["status"] = "not_measured"
-        layer["reason"] = "no source file has a verified comment reader"
-    elif unread:
+    elif reasons:
         layer["status"] = "partial"
-        layer["reason"] = "%d file(s) have no verified comment reader" % unread
     else:
         layer["status"] = "measured"
     return layer
