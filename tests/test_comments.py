@@ -44,8 +44,24 @@ class PythonExtractionTests(unittest.TestCase):
         texts = [c.text for c in got]
         self.assertIn("Return f.", texts)
 
-    def test_syntax_error_returns_none_not_empty(self):
+    def test_tokenize_failure_returns_none_not_empty(self):
+        # `def (:` has an unclosed parenthesis, so `tokenize` itself raises
+        # TokenError -- this input never reaches `ast.parse`.
         self.assertIsNone(CM.extract_python("def (:\n"))
+
+    def test_source_that_tokenizes_but_does_not_parse_returns_none(self):
+        """`tokenize` is lexical and succeeds where `ast.parse` fails.
+
+        Verified staging for `x = = 1`: `tokenize` returns a full token
+        stream, `ast.parse` raises SyntaxError. Without this, the `#`
+        comments would come back while the docstrings were never extracted
+        and the declaration table was never built -- a measured zero for a
+        file nothing here could read. The everyday trigger is not a typo but
+        syntax newer than the interpreter running the audit (PEP 695
+        `type X = int` on 3.11, `match` on 3.9).
+        """
+        self.assertIsNone(CM.extract_python('# print(x)\ndef f():\n    """Doc."""\n    x = = 1\n'))
+        self.assertIsNone(CM.extract_python("a b c\n"))
 
 
 class BraceExtractionTests(unittest.TestCase):
@@ -619,8 +635,20 @@ class ClassifyFileTests(unittest.TestCase):
     def test_unreadable_language_returns_none_not_zero(self):
         self.assertIsNone(CM.classify_file("-- x\n", ".lua"))
 
-    def test_unparseable_python_returns_none_not_zero(self):
+    def test_python_failing_tokenize_returns_none_not_zero(self):
         self.assertIsNone(CM.classify_file("def (:\n", ".py"))
+
+    def test_python_failing_parse_returns_none_not_zero(self):
+        """A file that tokenizes but does not parse is not measured.
+
+        This exact source used to return `noise_comment_lines: 1` with
+        `trivial_doc: {"lines": [], "count": 0}` -- the docstring on line 3
+        was never extracted and no declaration table was built, yet the file
+        joined `layer["files"]` as measured with a zero for a class nobody
+        ran.
+        """
+        src = '# print(x)\ndef f():\n    """Doc."""\n    x = = 1\n'
+        self.assertIsNone(CM.classify_file(src, ".py"))
 
     def test_brace_file_has_no_commented_out_class(self):
         got = CM.classify_file("// x = 1;\nint y;\n", ".c")
@@ -752,6 +780,16 @@ class LayerTests(unittest.TestCase):
         self.assertEqual(layer["status"], "partial")
         self.assertEqual([row["path"] for row in layer["files"]], ["a.py"])
         self.assertEqual(layer["not_measured_files"], 1)
+
+    def test_python_that_does_not_parse_is_counted_as_not_measured(self):
+        # Newer syntax than the interpreter running the audit is the common
+        # cause; `x = = 1` stands in for it because it fails the same stage.
+        self._write("a.py", "x = 1\n")
+        self._write("b.py", "# print(x)\nx = = 1\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py", "b.py"]), self.cfg)
+        self.assertEqual([row["path"] for row in layer["files"]], ["a.py"])
+        self.assertEqual(layer["not_measured_files"], 1)
+        self.assertEqual(layer["status"], "partial")
 
     def test_all_files_readable_gives_measured(self):
         self._write("a.py", "x = 1\n")

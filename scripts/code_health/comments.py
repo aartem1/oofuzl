@@ -34,10 +34,22 @@ Comment = namedtuple("Comment", "line end_line text inline docstring")
 
 
 def extract_python(text):
-    """Comments and docstrings of one Python source, or None if it does not parse."""
+    """Comments and docstrings of one Python source, or None if it does not parse.
+
+    Two independent failures, both `None`, because `tokenize` is lexical and
+    succeeds on plenty of sources `ast.parse` rejects. The common trigger is
+    not a typo: it is syntax newer than the interpreter running the audit --
+    PEP 695 `type X = int` on 3.11, `match` on 3.9. Returning the `#` comments
+    alone there would report a file whose docstrings were never extracted and
+    whose declaration table was never built as `trivial_doc: count 0`, i.e. a
+    measured zero for a file nothing in this module could read.
+    """
     try:
         toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError):
+        return None
+    docstrings = _python_docstrings(text)
+    if docstrings is None:
         return None
     lines = text.splitlines()
     raw = []
@@ -49,7 +61,7 @@ def extract_python(text):
         raw.append(Comment(line=row, end_line=row,
                            text=tok.string.lstrip("#").strip(),
                            inline=bool(before.strip()), docstring=False))
-    return _merge_runs(raw) + _python_docstrings(text)
+    return _merge_runs(raw) + docstrings
 
 
 def _merge_runs(items):
@@ -70,10 +82,16 @@ _DOC_NODES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _python_docstrings(text):
+    """Docstring records with their owning declaration, or None if `text` does not parse.
+
+    `None` and `[]` are different answers: `[]` is "parsed, has no docstring",
+    `None` is "never parsed". Only the caller can tell them apart, and
+    `extract_python` turns the second into a `None` for the whole file.
+    """
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        return []
+        return None
     out = []
     for node in ast.walk(tree):
         if not isinstance(node, _DOC_NODES):
