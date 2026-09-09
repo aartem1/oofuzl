@@ -192,36 +192,39 @@ class CommentedOutTests(unittest.TestCase):
         self.assertFalse(CM.is_commented_out("TODO: x = 1"))
 
     def test_docstring_with_code_example_is_not_flagged(self):
-        """Prose with one code-like line is still prose by majority rule.
+        """Regression: the docstring of _if_depth in pyast.py, line 222.
 
-        A fifteen-line prose docstring with one `else:` from a worked example
-        should not be flagged as commented-out code. Majority rule: > half of
-        non-empty lines must read as code.
+        One code-looking line (`else:`) in a 16-line prose block should not
+        trigger the detector. Majority rule: > half of non-empty lines must
+        read as code. Real comment: 1 code line of 16 non-empty lines fails.
         """
-        docstring = """Evaluate each branch as a logical expression. A null guard
-and a type narrower are both tests of the argument value; if the value
-is not null, we step into the first branch; if it is, we step into the
-`elif` branch; if both tests fail, we step into the `else:` branch.
-Pseudo-code:
+        # Verbatim from scripts/code_health/pyast.py lines 222-236
+        docstring = """One `if`/`elif`/`else` chain is one nesting level, not one per branch.
 
-  if arg is not None:
-    print("first")
-  elif arg is str:
-    print("second")
-  else:
-    print("third")
-
-When stacked this way, each branch counts as one nesting level."""
+    `elif` has no AST node of its own: `if a: ..\nelif b: ..` and
+    `if a: ..\nelse:\n    if b: ..` produce the identical
+    `If(orelse=[If(...)])` shape, so the two cannot be told apart from the
+    tree alone. Both are treated as continuing the same chain -- staying at
+    `depth`, not `depth + 1` -- matching how a human reads an
+    if/elif/.../else ladder as a single decision. This is the same
+    "else-if" exception `lizardnd.py` carves out for brace languages
+    (`prev_was_else`), applied here at the AST level instead of the token
+    level, and it means a genuine `else:` block with unrelated nested `if`
+    written at the same indentation as an `elif` is indistinguishable from
+    one and is treated the same way -- an inherent ambiguity of the
+    grammar, not a gap in this pass."""
         self.assertFalse(CM.is_commented_out(docstring))
 
     def test_bare_expression_without_call_is_not_flagged(self):
-        """Prose that parses is not code if it lacks function calls.
+        """Regression: a real comment from comments.py line 374.
 
-        Text like "C/Java/C# typed form" parses as valid Python (a binary
-        expression C/Java slash C# slash form), but is documentation. Bare
-        expressions without calls are prose, not commented-out code.
+        Prose that parses as valid Python syntax but contains no function
+        calls is documentation, not commented-out code. This line parses as
+        a valid binary expression (C/Java slash C# slash form) but the # in
+        C# truncates it for compile(). After compile succeeds, it has no Call.
         """
-        prose_that_parses = "C/Java/C# typed form (, )."
+        # Verbatim from scripts/code_health/comments.py line 374
+        prose_that_parses = "C/Java/C# typed form (`static int read_block(`, `static char *read_line(`)."
         self.assertFalse(CM.is_commented_out(prose_that_parses))
 
 
