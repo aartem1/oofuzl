@@ -121,6 +121,15 @@ _PROSE_RE = re.compile("|".join("(?:%s)" % p for p in _PROSE_PATTERNS),
 # 10 examples at this length, with >=88% agreement in nine of them.
 LONG_COMMENT_WORDS = 30
 
+# Steidl's first length rule: at this length or below, 70% of developers chose
+# to delete the comment or to fold its text into a function name. 0.70 is below
+# the 0.85 bar this repository sets for a counted class, so `short_inline` is
+# reported and never summed -- three classes added together would carry the
+# precision of the weakest one.
+SHORT_INLINE_WORDS = 2
+
+COUNTED_CLASSES = ("commented_out", "trivial_doc")
+
 # eradicate v3.0.1's pipeline. The final step is a real parse, which is why
 # this class is the most accurate of the three (P 0.89 / R 0.95, Steidl 2013);
 # everything above it exists to stop prose from ever reaching `compile`.
@@ -386,3 +395,62 @@ def declarations(text, ext):
     if ext in BRACE_EXT:
         return declarations_brace(text)
     return {}
+
+
+def classify_file(text, ext, chars_per_token=4):
+    """One file's comment classes, or None when no reader covers `ext`."""
+    found = extract(text, ext)
+    if found is None:
+        return None
+    decls = declarations(text, ext)
+    buckets = {"commented_out": [], "trivial_doc": [], "short_inline": []}
+    zero, noise_chars, immune = [], 0, 0
+
+    for item in found:
+        # Directives (eradicate's whitelist) gate every detector, including
+        # `commented_out`: a `# type: ignore` line is tooling metadata even
+        # when its body also happens to parse as code.
+        if is_directive(item.text):
+            immune += 1
+            continue
+        # Commented-out code is code, not prose -- checked ahead of the prose
+        # gate so a line like `# return None` is classified as a return
+        # statement, never protected as documentation of null semantics.
+        if ext == ".py" and is_commented_out(item.text):
+            klass = "commented_out"
+        else:
+            if is_prose_immune(item.text):
+                immune += 1
+                continue
+            name = decls.get(item.end_line + 1) or decls.get(item.line - 1)
+            score = coherence(item.text, name) if name else None
+            if score is not None and score > TRIVIAL_COHERENCE:
+                klass = "trivial_doc"
+            elif item.inline and len(words_of(item.text)) <= SHORT_INLINE_WORDS:
+                klass = "short_inline"
+            else:
+                # Steidl: a score of exactly 0 means the comment shares no word
+                # with the name it documents -- either it carries information the
+                # name does not, or the name is wrong. Never noise on its own;
+                # `audit` folds it into an existing complexity group as evidence.
+                if score == 0:
+                    zero.append({"line": item.line, "function": name})
+                continue
+        buckets[klass].extend(range(item.line, item.end_line + 1))
+        if klass in COUNTED_CLASSES:
+            noise_chars += len(item.text)
+
+    evidence = {"tokens": -(-noise_chars // chars_per_token), "immune": immune,
+                "zero_coherence": zero}
+    for klass, lines in buckets.items():
+        if klass == "commented_out" and ext != ".py":
+            evidence[klass] = None
+            continue
+        evidence[klass] = {"lines": sorted(lines), "count": len(lines)}
+
+    return {
+        "noise_comment_lines": sum(
+            len(buckets[k]) for k in COUNTED_CLASSES
+            if evidence.get(k) is not None),
+        "evidence": evidence,
+    }

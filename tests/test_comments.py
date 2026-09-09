@@ -329,5 +329,67 @@ class DeclarationDispatchTests(unittest.TestCase):
         self.assertEqual(CM.declarations("function f()\n", ".lua"), {})
 
 
+class ClassifyFileTests(unittest.TestCase):
+    def test_commented_out_and_trivial_doc_count_toward_the_value(self):
+        src = ('def remove_all_markers(self):\n'
+               '    """Removes all markers."""\n'
+               '    # print(self.markers)\n'
+               '    self.markers.clear()\n')
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["noise_comment_lines"], 2)
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [2])
+        self.assertEqual(got["evidence"]["commented_out"]["lines"], [3])
+
+    def test_short_inline_is_reported_but_not_counted(self):
+        got = CM.classify_file("n = n + 1  # bump n\n", ".py")
+        self.assertEqual(got["noise_comment_lines"], 0)
+        self.assertEqual(got["evidence"]["short_inline"]["lines"], [1])
+
+    def test_immune_comment_is_counted_as_immune_only(self):
+        got = CM.classify_file("x = 1  # ms, not seconds\n", ".py")
+        self.assertEqual(got["noise_comment_lines"], 0)
+        self.assertEqual(got["evidence"]["immune"], 1)
+        self.assertEqual(got["evidence"]["short_inline"]["lines"], [])
+
+    def test_a_block_of_commented_out_code_counts_every_line(self):
+        got = CM.classify_file("# a = 1\n# b = 2\nx = 3\n", ".py")
+        self.assertEqual(got["noise_comment_lines"], 2)
+
+    def test_file_with_no_comments_scores_zero(self):
+        got = CM.classify_file("x = 1\n", ".py")
+        self.assertEqual(got["noise_comment_lines"], 0)
+
+    def test_unreadable_language_returns_none_not_zero(self):
+        self.assertIsNone(CM.classify_file("-- x\n", ".lua"))
+
+    def test_unparseable_python_returns_none_not_zero(self):
+        self.assertIsNone(CM.classify_file("def (:\n", ".py"))
+
+    def test_brace_file_has_no_commented_out_class(self):
+        got = CM.classify_file("// x = 1;\nint y;\n", ".c")
+        self.assertEqual(got["evidence"]["commented_out"], None)
+        self.assertEqual(got["noise_comment_lines"], 0)
+
+    def test_trivial_doc_fires_in_a_brace_language(self):
+        got = CM.classify_file("// returns the total price\n"
+                               "function returnTotalPrice() {}\n", ".js")
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [1])
+        self.assertEqual(got["noise_comment_lines"], 1)
+
+    def test_comment_sharing_no_word_with_its_declaration_is_zero_coherence(self):
+        got = CM.classify_file(
+            "# callers holding a stale handle crash on the second pass\n"
+            "def flush():\n    pass\n", ".py")
+        self.assertEqual(got["evidence"]["zero_coherence"],
+                         [{"line": 1, "function": "flush"}])
+        self.assertEqual(got["noise_comment_lines"], 0)
+
+    def test_zero_coherence_never_counts_as_noise(self):
+        got = CM.classify_file("# see #42 for the reason\ndef flush():\n    pass\n",
+                               ".py")
+        self.assertEqual(got["evidence"]["zero_coherence"], [])
+        self.assertEqual(got["evidence"]["immune"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
