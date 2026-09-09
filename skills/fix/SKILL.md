@@ -199,14 +199,46 @@ uncommitted, the item is marked `failed`, and the cycle stops (step 3, item 7).
 5. The repo-wide `summary` (step 2's `queue.baseline_summary`) did not improve consistently with the
    local metric this group targeted — a sign the problem moved somewhere the measurer no longer
    looks, rather than actually shrinking.
-6. For a `comment_noise` group, comment lines the diff deletes outside `evidence.commented_out.lines`
-   and `evidence.trivial_doc.lines` combined — the finding's exact line numbers for its two counted
-   classes. Anything outside that union is a comment the detector judged worth keeping, and deleting
-   it is how this metric is gamed: fewer comment lines lowers `file_lines` and `file_tokens`, so rule
-   5's repo-wide comparison reads the deletion as an improvement and confirms it instead of catching
-   it. `evidence.short_inline.lines` stays outside the protected set — that class is evidence-only,
-   never counted into `noise_comment_lines`, so deleting one of those lines is not gaming, though it
-   earns no credit either.
+6. **Comment lines deleted outside the protected set.** Applies to a `comment_noise`,
+   `file_too_long` or `file_too_expensive` group — those three and no others. Deleting comments
+   lowers `file_lines` and `file_tokens`, so rule 5's repo-wide comparison reads the deletion as an
+   improvement and confirms it instead of catching it; `file_too_long` and `file_too_expensive` are
+   the groups where that pays best, which is why the rule covers them and not only the group that
+   happens to carry line numbers.
+
+   **The protected set** is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines`, taken
+   from every `comment_noise` finding on the file being changed — including a `comment_noise`
+   finding on a file whose group is `file_too_long`. Anything outside that union is a comment the
+   detector judged worth keeping. If the file carries no `comment_noise` finding at all, the
+   protected set is empty and **every** comment line the diff deletes is a hit.
+   `evidence.short_inline.lines` stays outside the protected set: that class is evidence-only,
+   never counted into `noise_comment_lines`, so deleting one of those lines is not gaming, though
+   it earns no credit either.
+
+   **Read `null` as "never ran", never as an empty list.** `evidence.commented_out` is `null` for
+   every finding in a brace language — that class is Python-only. `null` contributes nothing to the
+   union and is never read as permission to delete; the same file's `evidence.trivial_doc.lines`
+   still applies in full.
+
+   **The line numbers are old-side.** They come from the pre-fix measurement, so they name lines in
+   the diff's **pre-image** — its `-` and context lines. Map them there before comparing; matching
+   them against post-image (`+`) numbers compares two different files and silently protects the
+   wrong lines.
+
+   **What counts as a deleted comment line is not decided by a `#` or `//` prefix.** The detector
+   counts docstring lines and `/* … */` interiors, and neither of those starts with a comment
+   marker — so a prefix test would wave through the likeliest gaming move in a Python repository:
+   deleting a whole unflagged docstring. A deleted line is a comment line when it is any of:
+   - a `#` or `//` line comment, on its own line or trailing after code;
+   - any line inside a deleted `/* … */` block, its `/*` and `*/` lines included;
+   - any line inside a deleted Python docstring, its opening and closing `"""`/`'''` lines
+     included — a string expression standing alone as the first statement of a module, class, or
+     function.
+
+   **One exception, and it is rule 4's, not a new one:** a comment deleted *together with the code
+   it documented* — the whole function moved or removed — is not a deleted comment, and the moved
+   copy is its equivalent replacement. What rule 6 catches is a comment deleted while the code it
+   sat on stays.
 
 **The false-positive exception, restored from v0.2.0.** Rule 3 is not absolute. A suppression is
 permitted when the finding is demonstrably a false positive *and* the user explicitly approves it

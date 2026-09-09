@@ -881,6 +881,14 @@ Applied to each group's diff before its commit. Any hit ⇒ reject: edits stay u
    replacement.
 5. Repo-wide `summary` did not improve consistently with the local metric — code moved somewhere
    the measurer no longer looks. Compared against `queue.baseline_summary`.
+6. Comment lines deleted outside the protected set, for a `comment_noise`, `file_too_long` or
+   `file_too_expensive` group. Deleting comments lowers `file_lines` and `file_tokens`, so rule 5
+   reads the deletion as an improvement and confirms it; the two size groups are where that pays
+   best. The protected set is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines` from
+   every `comment_noise` finding on the file — `null` means the class never ran (`commented_out` is
+   Python-only) and grants nothing; the numbers are **old-side**, from the pre-fix measurement; and
+   a deleted comment line is not decided by a `#`/`//` prefix, because the detector counts
+   docstring lines and `/* */` interiors too. `skills/fix/SKILL.md` carries the operative text.
 
 **The false-positive exception, restored from v0.2.0.** Rule 3 is not absolute. A suppression is
 permitted when the finding is demonstrably a false positive *and* the user explicitly approves it
@@ -1196,7 +1204,7 @@ first. `SKILL.md` files are instructions and get skill validation.
 | ratchet | existing file grows → fail; shrinks → pass; new file under `warn` → pass, over `warn` → fail; new function over `warn` in an old file → fail; renamed function treated as new; threshold lowered in config tightens immediately |
 | guard performance | 20 changed files within the budget |
 | gate detection | `config.gate` wins over `make gate`; each of the five remaining sources; the ask fallback |
-| anti-gaming | each of the five rules triggers on a crafted diff, including a diff touching `.pre-commit-config.yaml` |
+| anti-gaming | each of the six rules triggers on a crafted diff, including a diff touching `.pre-commit-config.yaml`, and one deleting an unflagged docstring under a `file_too_long` group |
 
 Fixtures are small synthetic repositories built in a temp directory, never checked-in copies of real
 code. Tests needing `lizard` skip cleanly when it is absent, so the suite runs anywhere.
