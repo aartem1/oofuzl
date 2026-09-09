@@ -469,6 +469,112 @@ class BraceDeclarationTests(unittest.TestCase):
             CM.declarations_brace("throw makeError(x); /* note\n"), {})
 
 
+class BraceLanguageProbeTests(unittest.TestCase):
+    """Every extension in `BRACE_EXT` must resolve a real declaration.
+
+    `BRACE_EXT` decides which files get `status: "measured"` and a
+    `trivial_doc` count. An extension whose declarations `declarations_brace`
+    cannot see still yields comments, so every one of its files reports
+    `trivial_doc: count 0` -- "checked, found nothing" for a language nobody
+    checked. That is the same silent zero this repository refuses for
+    lizard's nesting column, one level down, so admission to `BRACE_EXT` is
+    pinned here by a per-extension probe rather than by the reader existing.
+    The table and the rejected extensions are recorded in
+    `references/tools.md`.
+    """
+
+    # (extension, one realistic declaration, the name it must resolve to)
+    PROBE = [
+        (".c", "static int read_block(int fd) {", "read_block"),
+        (".h", "static inline int cache_size(void) {", "cache_size"),
+        (".cpp", "int Cache::load_all(int fd) {", "load_all"),
+        (".cc", "std::string Cache::name() const {", "name"),
+        (".hpp", "class Cache {", "Cache"),
+        (".cs", "public async Task<int> LoadAll(int fd) {", "LoadAll"),
+        (".java", "public double returnTotalPrice() {", "returnTotalPrice"),
+        (".js", "function returnTotalPrice() {", "returnTotalPrice"),
+        (".jsx", "export function UserRow(props) {", "UserRow"),
+        (".mjs", "export async function loadAll() {", "loadAll"),
+        (".cjs", "const load = function(x) {", "load"),
+        (".ts", "export interface FiltersState {", "FiltersState"),
+        (".tsx", "export const UserRow = (props: Props) => {", "UserRow"),
+        (".go", "func (c *Cache) LoadAll() []Entry {", "LoadAll"),
+        (".kt", "fun loadAll(fd: Int): Int {", "loadAll"),
+        (".rs", "pub fn parse_all(x: u8) -> u8 {", "parse_all"),
+        (".swift", "func loadAll(fd: Int) -> Int {", "loadAll"),
+        (".scala", "def loadAll(fd: Int): Int = {", "loadAll"),
+    ]
+
+    def test_every_probed_extension_resolves_its_declaration(self):
+        for ext, line, name in self.PROBE:
+            with self.subTest(ext=ext):
+                self.assertEqual(CM.declarations(line + "\n", ext), {1: name})
+
+    def test_the_probe_covers_every_extension_in_brace_ext(self):
+        """No extension may join `BRACE_EXT` without a probe row.
+
+        Without this, the next extension added silently inherits `measured`
+        on the strength of the comment scanner alone, which is exactly how
+        `.m` and `.mm` got in.
+        """
+        self.assertEqual(sorted(CM.BRACE_EXT),
+                         sorted(ext for ext, _, _ in self.PROBE))
+
+    def test_objective_c_stays_out_because_it_fails_the_probe(self):
+        """`- (void)m:(int)x {` matches none of the three declaration shapes.
+
+        Kept as a test rather than deleted with the extension: it records
+        why `.m`/`.mm` are absent, so re-adding them without a fourth
+        declaration shape turns this red instead of restoring a silent zero.
+        """
+        self.assertEqual(
+            CM.declarations_brace("- (void)loadAllMarkers:(int)x {\n"), {})
+        self.assertNotIn(".m", CM.BRACE_EXT)
+        self.assertNotIn(".mm", CM.BRACE_EXT)
+
+    def test_matlab_source_is_not_read_as_a_brace_language(self):
+        """`.m` is MATLAB at least as often as Objective-C.
+
+        MATLAB comments are `%`, invisible to this reader, and its transpose
+        operator `'` opens a literal `_skip_literal` never closes -- so the
+        rest of the file is swallowed and the file reports zero comments.
+        """
+        matlab = ("% normalise each column\n"
+                  "function y = normalise(x)\n"
+                  "  y = x' * 2;  % transpose, then scale\n"
+                  "end\n")
+        self.assertIsNone(CM.extract(matlab, ".m"))
+        self.assertEqual(CM.extract_brace(matlab), [])
+
+
+class CppQualifiedNameTests(unittest.TestCase):
+    """An out-of-line C++ member definition names the method, not nothing.
+
+    `int Cache::load_all(int fd) {` is the ordinary shape of a `.cpp`
+    definition whose declaration sits in the header; before the `::` was
+    accepted, every such file reported `trivial_doc: 0` regardless of its
+    comments.
+    """
+
+    def test_qualified_member_definition_resolves_the_bare_name(self):
+        self.assertEqual(CM.declarations_brace("int Cache::load_all(int fd) {\n"),
+                         {1: "load_all"})
+
+    def test_namespaced_return_type_does_not_block_the_match(self):
+        self.assertEqual(
+            CM.declarations_brace("std::string Cache::name() const {\n"),
+            {1: "name"})
+
+    def test_a_single_colon_is_not_a_qualifier(self):
+        # `handler: makeHandler(x),` is a JS object-literal property whose
+        # value is a call. Accepting a single `:` in the type position would
+        # read it as a declaration of `makeHandler` -- the call-site false
+        # positive `_is_statement` cannot catch, because the line ends in a
+        # comma rather than a `;`.
+        self.assertEqual(
+            CM.declarations_brace("  handler: makeHandler(x),\n"), {})
+
+
 class DeclarationDispatchTests(unittest.TestCase):
     def test_python_routes_to_ast(self):
         self.assertEqual(CM.declarations("def f():\n    pass\n", ".py"), {1: "f"})

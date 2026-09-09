@@ -87,15 +87,26 @@ def _python_docstrings(text):
     return sorted(out, key=lambda c: c.line)
 
 
-# Extensions with a verified `//` + `/* */` reader. `.lua` (`--`), `.rb` (`#`
-# plus `=begin`) and `.php` (three syntaxes, one of them `#`) are deliberately
-# absent: each needs its own reader, and an unverified one would report a
-# number nobody checked -- the defect this repository already refuses for
-# lizard's nesting column.
+# Extensions with a verified `//` + `/* */` reader AND a `declarations_brace`
+# resolution verified by the per-extension probe in `references/tools.md`. Two
+# admission tests, not one: a reader that finds the comments but cannot name
+# the declaration under them reports `trivial_doc: 0` on every file, which
+# reads as "checked, found nothing" for a language whose declarations nobody
+# can see -- the same silent zero this repository already refuses for lizard's
+# nesting column.
+#
+# Deliberately absent, each named with its evidence in `references/tools.md`:
+# `.lua` (`--`), `.rb` (`#` plus `=begin`) and `.php` (three comment syntaxes,
+# one of them `#`) have no comment reader here at all; `.m` and `.mm` have one
+# but fail the declaration probe -- Objective-C's `- (void)loadAll:(int)x {`
+# matches none of the three declaration shapes below, and `.m` is MATLAB at
+# least as often as it is Objective-C, where `%` comments are invisible to
+# this reader and the transpose `'` opens a phantom string literal that
+# swallows the rest of the file.
 BRACE_EXT = frozenset({
     ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".java",
     ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
-    ".go", ".kt", ".rs", ".swift", ".scala", ".m", ".mm",
+    ".go", ".kt", ".rs", ".swift", ".scala",
 })
 
 
@@ -481,6 +492,15 @@ def declarations_python(text):
 # A bare `name(` is excluded on purpose -- that is a call site, and treating
 # it as a declaration would attach every comment above a call to the callee's
 # name.
+#
+# The typed form carries `::` in two positions, both required by the probe in
+# `references/tools.md` and by nothing else: in the return type, so that
+# `std::string Cache::name() const {` gets past the prefix; and before the
+# captured name, so that an out-of-line C++ member definition
+# `int Cache::load_all(int fd) {` reports `load_all` rather than nothing.
+# Only the doubled colon is accepted -- a single one would make the JS object
+# literal `handler: makeHandler(x),` read as a declaration of `makeHandler`,
+# which is the call-site false positive `_is_statement` exists to reject.
 _KEYWORD_DECL = re.compile(
     r"^[^\S\n]*(?:[\w@$]+[^\S\n]+)*?"
     r"(?:function|func|fn|class|struct|interface|type|enum|protocol)"
@@ -489,7 +509,8 @@ _ARROW_DECL = re.compile(
     r"^[^\S\n]*(?:export[^\S\n]+)?(?:const|let|var)[^\S\n]+([A-Za-z_$][\w$]*)"
     r"[^\S\n]*=[^\S\n]*(?:async[^\S\n]+)?(?:\([^)]*\)[^\S\n]*=>|function\b)")
 _TYPED_DECL = re.compile(
-    r"^[^\S\n]*(?:[\w.<>\[\]*&$]+[^\S\n]+)+[*&]*([A-Za-z_$][\w$]*)[^\S\n]*\(")
+    r"^[^\S\n]*(?:[\w.<>\[\]*&$]+(?:::[\w.<>\[\]*&$]+)*[^\S\n]+)+[*&]*"
+    r"(?:[A-Za-z_$][\w$]*::)*([A-Za-z_$][\w$]*)[^\S\n]*\(")
 _NOT_A_DECL = frozenset({
     "if", "for", "while", "switch", "catch", "return", "else", "do", "with",
 })
