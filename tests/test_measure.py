@@ -153,11 +153,14 @@ class LayerStatusContractTests(unittest.TestCase):
 
 
 class JavaScriptOnlyRepoTests(LayerStatusContractTests):
-    """The same contract where the *imports* layer is the broken dependency.
+    """The same contract where the *symbol table* is the missing dependency.
 
-    A repository with no Python has no symbol table at all -- `measure_imports`
-    reports `not_measured` -- so `symbol_collisions` must come back as "not
-    measured" rather than as an empty list next to `derived.status: measured`.
+    A repository with no Python has no symbol table at all, so
+    `symbol_collisions` must come back as "not measured" rather than as an
+    empty list next to `derived.status: measured` -- and that holds whether or
+    not madge is installed. With madge present the *import graph* is measured
+    for JavaScript while the symbol table is still absent, which is exactly the
+    case where an empty collision list would look like a clean result.
     """
 
     @classmethod
@@ -166,8 +169,11 @@ class JavaScriptOnlyRepoTests(LayerStatusContractTests):
 
     def test_no_layer_claims_measured_on_an_unmeasured_dependency(self):
         layers = self.doc["layers"]
-        self.assertEqual(layers["imports"]["status"], "not_measured")
         self.assertIsNone(layers["derived"]["symbol_collisions"])
+        self.assertFalse(layers["imports"].get("symbols"))
+        self.assertNotIn("python", layers["imports"].get("languages_measured") or [])
+        if layers["imports"]["status"] != "measured":
+            self.assertTrue(layers["imports"].get("reason"))
         self.assert_no_confident_zero(self.doc)
 
 

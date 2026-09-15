@@ -26,8 +26,13 @@ class DerivedTests(unittest.TestCase):
 
     def imports(self, symbols=()):
         """A real imports layer always carries a status; `derived` now reads
-        it, because a symbol table it never received is not an empty one."""
-        return {"status": "measured", "symbols": list(symbols)}
+        it, because a symbol table it never received is not an empty one.
+
+        `languages_measured` carries python because the symbol table is a
+        product of the Python pass: an imports layer measured for JavaScript
+        alone has no symbols, and `derived` distinguishes the two."""
+        return {"status": "measured", "languages_measured": ["python"],
+                "symbols": list(symbols)}
 
     def churn(self):
         return {"status": "measured",

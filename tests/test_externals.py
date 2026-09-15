@@ -87,6 +87,87 @@ class GracefulAbsenceTests(unittest.TestCase):
         self.assertIn("vulture", out["reason"])
 
 
+class NpxProvisioningTests(unittest.TestCase):
+    """`npx -y <pkg>` populates npx's own cache, which `npx --no-install` never
+    consults: the tool that was just installed successfully was then reported
+    as unavailable, and jscpd/madge layers came back `partial` on a machine
+    where both tools work."""
+
+    def _fake_run(self, script):
+        calls = []
+
+        def fake(argv, timeout=None, cwd=None):
+            calls.append(argv)
+            rc, out = script(argv)
+            return type("P", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+
+        return calls, fake
+
+    def test_provision_trusts_the_install_command_it_just_ran(self):
+        def script(argv):
+            if argv[:2] == ["npx", "-y"]:
+                return 0, "jscpd 5.2.1\n"
+            return 1, ""            # every --no-install probe misses the cache
+
+        calls, fake = self._fake_run(script)
+        original, original_which = EX._run, EX.shutil.which
+        # npx itself is on PATH; the tool it installs is not.
+        EX._run = fake
+        EX.shutil.which = lambda name: "/usr/local/bin/npx" if name == "npx" else None
+        try:
+            state = EX.provision("jscpd")
+        finally:
+            EX._run, EX.shutil.which = original, original_which
+        self.assertTrue(state["available"], state.get("reason"))
+        self.assertTrue(state["installed_by_us"])
+        self.assertIn("5.2.1", state["version"])
+
+    def test_probe_uses_a_tool_already_on_path(self):
+        def script(argv):
+            if argv[0] == "/usr/local/bin/madge":
+                return 0, "8.0.0\n"
+            return 1, ""
+
+        calls, fake = self._fake_run(script)
+        original, original_which = EX._run, EX.shutil.which
+        EX._run = fake
+        EX.shutil.which = lambda name: "/usr/local/bin/madge" if name == "madge" else None
+        try:
+            state = EX.probe("madge")
+        finally:
+            EX._run, EX.shutil.which = original, original_which
+        self.assertTrue(state["available"], state.get("reason"))
+        self.assertEqual(state["version"], "8.0.0")
+        self.assertEqual(state["bin"], "/usr/local/bin/madge")
+        self.assertNotIn("npx", [a[0] for a in calls])
+
+    def test_absent_npx_tool_names_both_lookups_in_its_reason(self):
+        original, original_which = EX._run, EX.shutil.which
+        EX._run = lambda argv, timeout=None, cwd=None: type(
+            "P", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+        EX.shutil.which = lambda name: None
+        try:
+            state = EX.probe("jscpd")
+        finally:
+            EX._run, EX.shutil.which = original, original_which
+        self.assertFalse(state["available"])
+        self.assertIn("PATH", state["reason"])
+        self.assertIn("npx", state["reason"])
+
+    def test_runners_invoke_the_path_binary_when_probe_found_one(self):
+        calls, fake = self._fake_run(lambda argv: (0, "{}"))
+        original = EX._run
+        EX._run = fake
+        try:
+            EX.run_madge(Path(tempfile.mkdtemp()), ["a.js"],
+                         {"available": True, "reason": None,
+                          "bin": "/usr/local/bin/madge"})
+        finally:
+            EX._run = original
+        self.assertEqual(calls[0][0], "/usr/local/bin/madge")
+        self.assertNotIn("npx", calls[0])
+
+
 class MergeTests(unittest.TestCase):
     def test_madge_result_extends_the_python_layer(self):
         import measure  # scripts/ is on sys.path via helpers.load_package

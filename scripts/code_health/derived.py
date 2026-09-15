@@ -109,7 +109,7 @@ def _edit_fanout(churn_layer):
     return fanout, (basis if baseline else "unavailable")
 
 
-def _degraded(value, dep_name, dep_layer, what):
+def _degraded(value, dep_name, dep_layer, what, dep_available=None):
     """`(value, reason)` for one derived metric against the layer it is
     computed FROM.
 
@@ -119,11 +119,22 @@ def _degraded(value, dep_name, dep_layer, what):
     came out `[]` under `status: "measured"` -- a confident "this repository
     has no hotspots". Same shape as the churn guard above, applied to the
     other two dependencies.
+
+    `dep_available` overrides the layer status for a metric that depends on
+    ONE product of that layer rather than on the layer as a whole. The symbol
+    table is built by the Python pass alone, so an `imports` layer that is
+    `measured` because madge mapped the JavaScript graph still carries no
+    symbols -- and an empty collision list there would be the same confident
+    zero this guard exists to prevent.
     """
-    if value or dep_layer.get("status") == "measured":
+    available = (dep_layer.get("status") == "measured"
+                 if dep_available is None else dep_available)
+    if value or available:
         return value, None
-    return None, "%s is %s (%s); %s" % (
-        dep_name, dep_layer.get("status"), dep_layer.get("reason"), what)
+    state = dep_layer.get("status")
+    detail = dep_layer.get("reason") or (
+        "no data for this repository" if state == "measured" else state)
+    return None, "%s is %s (%s); %s" % (dep_name, state, detail, what)
 
 
 def measure_derived(size_layer, churn_layer, imports_layer, cfg):
@@ -138,7 +149,8 @@ def measure_derived(size_layer, churn_layer, imports_layer, cfg):
         "hotspots need per-function complexity")
     collisions, sym_reason = _degraded(
         _collisions(imports_layer, cfg), "imports", imports_layer,
-        "symbol collisions need the symbol table")
+        "symbol collisions need the symbol table",
+        dep_available="python" in (imports_layer.get("languages_measured") or []))
     fanout, basis = _edit_fanout(churn_layer)
 
     reasons = [r for r in (hot_reason, sym_reason) if r]

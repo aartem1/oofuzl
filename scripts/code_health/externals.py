@@ -58,6 +58,21 @@ def _absent(reason):
             "installed_by_us": False}
 
 
+def _version_line(proc):
+    """Last non-empty output line. npx prefixes its own notices; the tool's own
+    `--version` output is what comes last."""
+    text = (getattr(proc, "stdout", "") or "").strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else None
+
+
+def _npx_argv(name, tool_state):
+    """Prefer a binary probe() already resolved on PATH; otherwise go through
+    npx, which re-resolves the package on every call."""
+    binary = (tool_state or {}).get("bin")
+    return [binary] if binary else ["npx", "-y", TOOLS[name]["package"]]
+
+
 def _run(argv, timeout=120, cwd=None):
     try:
         return subprocess.run(argv, capture_output=True, text=True,
@@ -79,12 +94,17 @@ def probe(name):
             return _absent("%s did not respond to %s" % (name, spec["probe"][1:]))
         return {"available": True, "version": (out.stdout or out.stderr).strip().split()[-1],
                 "reason": None, "installed_by_us": False, "bin": found}
+    on_path = shutil.which(name)
+    if on_path:
+        out = _run([on_path] + spec["probe"], timeout=60)
+        if out is not None and out.returncode == 0:
+            return {"available": True, "version": _version_line(out),
+                    "reason": None, "installed_by_us": False, "bin": on_path}
     out = _run(["npx", "--no-install", name] + spec["probe"], timeout=60)
     if out is None or out.returncode != 0:
-        return _absent("%s is not in the npx cache; needs `npx -y %s` and network"
-                       % (name, spec["package"]))
-    lines = (out.stdout or "").strip().splitlines()
-    return {"available": True, "version": lines[-1] if lines else None,
+        return _absent("%s is not on PATH and `npx --no-install` cannot resolve it; "
+                       "needs `npx -y %s` and network" % (name, spec["package"]))
+    return {"available": True, "version": _version_line(out),
             "reason": None, "installed_by_us": False}
 
 
@@ -107,6 +127,16 @@ def provision(name):
             pip = _VENV / "bin" / "pip"
             if _run([str(pip), "install", spec["package"]], timeout=600) is None:
                 continue
+        elif spec["kind"] == "npx":
+            # `npx -y <pkg>` populates npx's OWN cache, keyed by the package
+            # spec; `npx --no-install <name>` does not consult that cache and
+            # does not consult PATH either. Re-probing here therefore reported
+            # the tool that had just installed successfully as missing, and the
+            # jscpd/madge layers came back `partial` on a machine where both
+            # tools run fine. The install command already ran the probe
+            # arguments, so its own output is the evidence.
+            return {"available": True, "version": _version_line(out),
+                    "reason": None, "installed_by_us": True}
         state = probe(name)
         if state["available"]:
             state["installed_by_us"] = True
@@ -131,8 +161,8 @@ def run_jscpd(repo_root, cfg, tool_state):
                 "reason": "jscpd unavailable: %s" % tool_state.get("reason"),
                 "clones": []}
     out_dir = tempfile.mkdtemp(prefix="code-health-jscpd-")
-    proc = _run(["npx", "-y", TOOLS["jscpd"]["package"],
-                 "--min-tokens", str(cfg["near_duplicate"]["min_tokens"]),
+    proc = _run(_npx_argv("jscpd", tool_state) +
+                ["--min-tokens", str(cfg["near_duplicate"]["min_tokens"]),
                  "--reporters", "json", "--output", out_dir, "--silent",
                  str(repo_root)], timeout=900)
     report = Path(out_dir) / "jscpd-report.json"
@@ -168,7 +198,7 @@ def run_madge(repo_root, relpaths, tool_state):
     # requires, so the union of the chunk graphs is the same graph.
     graph = {}
     for start in range(0, len(js), _ARG_CHUNK):
-        proc = _run(["npx", "-y", TOOLS["madge"]["package"], "--json"]
+        proc = _run(_npx_argv("madge", tool_state) + ["--json"]
                     + js[start:start + _ARG_CHUNK], timeout=600, cwd=str(repo_root))
         if proc is None or proc.returncode != 0:
             return {"status": "not_measured", "reason": "madge failed",
