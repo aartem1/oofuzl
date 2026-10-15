@@ -1,6 +1,6 @@
 {
   "name": "code-health",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Measure, fix, and ratchet repository code health for AI-agent work: local metrics, optional SonarQube, a debt ledger, and a pre-commit guard",
   "author": {
     "name": "Artem"
