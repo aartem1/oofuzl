@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 BASELINE_RELPATH = Path(".code-health") / "baseline.json"
@@ -157,6 +158,131 @@ def _python_nesting(source):
     }
 
 
+# Tracker keys in comments. The same reader and detector as
+# code_health/comments.py (`ticket_refs`, `extract_brace`, `_physical_lines`),
+# duplicated for the reason the nesting pass above is; the parser agreement
+# test checks the two count the same lines.
+_TICKET_KEY_RE = re.compile(r"(?<![-\[])\b([A-Z][A-Z0-9]+)-\d+\b")
+_ISSUE_NUMBER_RE = re.compile(
+    r"\b(?:issues?|pr|pull|bug|fix(?:es|ed)?|close[sd]?|resolve[sd]?|see"
+    r"|задач[аеиуой]?|тикет[аеуом]?)\s*#\d+\b", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+")
+_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
+NOT_A_TRACKER = frozenset({
+    "UTF", "UCS", "ISO", "IEC", "IEEE", "ANSI", "ECMA", "ES", "RFC", "PEP",
+    "CVE", "CWE", "SHA", "MD", "AES", "RSA", "HMAC", "CRC", "KOI", "CP", "WIN",
+    "WINDOWS", "LATIN", "ASCII", "BASE", "HTTP", "TLS", "SSL", "IPV", "HTML",
+    "CSS", "JSON", "PKCS", "X", "Q1", "Q2", "Q3", "Q4", "H", "COVID", "GPT",
+})
+BRACE_EXT = {
+    ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".java",
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".go", ".kt", ".rs", ".swift", ".scala",
+}
+# A key in a new file fails; an old file may keep the keys it had.
+TICKET_REF_WARN = 1
+
+
+def ticket_refs(line, ignore=frozenset()):
+    if _TASK_TAG_RE.search(line):
+        return []
+    line = _URL_RE.sub(" ", line)
+    keys = [m.group(0) for m in _TICKET_KEY_RE.finditer(line)
+            if m.group(1) not in NOT_A_TRACKER and m.group(1) not in ignore]
+    return keys + [m.group(0) for m in _ISSUE_NUMBER_RE.finditer(line)]
+
+
+def _python_comment_lines(text, src_lines):
+    """`(line, text)` per comment line, or None when the source does not parse."""
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
+        tree = ast.parse(text)
+    except (tokenize.TokenError, SyntaxError, ValueError):
+        return None
+    out = []
+    for tok in toks:
+        if tok.type != tokenize.COMMENT:
+            continue
+        row, col = tok.start
+        before = src_lines[row - 1][:col] if row - 1 < len(src_lines) else ""
+        out.append((row, tok.string if before.strip() else src_lines[row - 1]))
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                              ast.AsyncFunctionDef))
+                and ast.get_docstring(node) is not None):
+            expr = node.body[0]
+            out.extend((n, src_lines[n - 1])
+                       for n in range(expr.lineno, expr.end_lineno + 1))
+    return out
+
+
+def _brace_comment_lines(text, src_lines):
+    out = []
+    i, n, line = 0, len(text), 1
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch in "\"'`":
+            i, line = _skip_literal(text, i, line)
+            continue
+        if ch == "/" and nxt in "/*":
+            if nxt == "/":
+                end = text.find("\n", i + 2)
+                end = n if end == -1 else end
+                body, stop = text[i + 2:end], end
+            else:
+                end = text.find("*/", i + 2)
+                body = text[i + 2:end if end != -1 else n]
+                stop = n if end == -1 else end + 2
+            last = line + body.count("\n")
+            if _has_code_before(text, i) and last == line:
+                out.append((line, body))
+            else:
+                out.extend((k, src_lines[k - 1])
+                           for k in range(line, min(last, len(src_lines)) + 1))
+            line, i = last, stop
+            continue
+        if ch == "\n":
+            line += 1
+        i += 1
+    return out
+
+
+def _skip_literal(text, i, line):
+    quote, n = text[i], len(text)
+    i += 1
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "\n":
+            line += 1
+        if ch == quote:
+            return i + 1, line
+        i += 1
+    return n, line
+
+
+def _has_code_before(text, i):
+    start = text.rfind("\n", 0, i) + 1
+    return bool(text[start:i].strip())
+
+
+def count_ticket_refs(text, ext, ignore=frozenset()):
+    """Comment lines carrying a tracker key, or None when no reader covers `ext`."""
+    src_lines = text.splitlines()
+    if ext == ".py":
+        found = _python_comment_lines(text, src_lines)
+    elif ext in BRACE_EXT:
+        found = _brace_comment_lines(text, src_lines)
+    else:
+        return None
+    if found is None:
+        return None
+    return len({n for n, line in found if ticket_refs(line, ignore)})
+
+
 def parse_lizard_csv(text):
     rows = []
     for raw in csv.reader(io.StringIO(text)):
@@ -263,7 +389,8 @@ def settings_for(repo_root):
             merged[name].update(override)
     return (merged,
             _chars_per_token(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)),
-            compile_excludes(cfg.get("exclude", [])))
+            compile_excludes(cfg.get("exclude", [])),
+            frozenset(cfg.get("ticket_ref_ignore") or ()))
 
 
 def _chars_per_token(value):
@@ -277,7 +404,7 @@ def _chars_per_token(value):
     return value
 
 
-def _read_files(repo_root, relpaths, chars_per_token):
+def _read_files(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
     """File-level measurements plus the Python nesting map, from disk only."""
     files, python_nesting = {}, {}
     for rel in relpaths:
@@ -288,6 +415,7 @@ def _read_files(repo_root, relpaths, chars_per_token):
         files[rel] = {
             "lines": len(text.splitlines()),
             "tokens": int(math.ceil(len(text) / float(chars_per_token))),
+            "ticket_refs": count_ticket_refs(text, Path(rel).suffix, ticket_ignore),
             "functions": {},
         }
         if rel.endswith(".py"):
@@ -357,9 +485,10 @@ def function_key(existing, name):
     return "%s#%d" % (name, index)
 
 
-def measure(repo_root, relpaths, chars_per_token):
+def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
     repo_root = Path(repo_root)
-    files, python_nesting = _read_files(repo_root, relpaths, chars_per_token)
+    files, python_nesting = _read_files(repo_root, relpaths, chars_per_token,
+                                        ticket_ignore)
     argv = resolve_lizard()
     if argv is None or not files:
         return files, argv is not None
@@ -385,7 +514,10 @@ def measure(repo_root, relpaths, chars_per_token):
 # surface: `ccn` and `nesting` mean nothing to someone reading a rejected
 # commit for the first time.
 _FILE_CHECKS = (("file lines", "lines", "file_lines"),
-                ("estimated tokens", "tokens", "file_tokens"))
+                ("estimated tokens", "tokens", "file_tokens"),
+                ("tracker keys in comments", "ticket_refs", "ticket_refs"))
+# Checks whose warn is fixed here, not read from `config.thresholds`.
+_FIXED_WARN = {"ticket_refs": TICKET_REF_WARN}
 _FUNC_CHECKS = (("function lines", "lines", "function_lines"),
                 ("cyclomatic complexity", "ccn", "function_ccn"),
                 ("parameters", "params", "parameters"),
@@ -411,6 +543,10 @@ def compare(measured, baseline, thresholds):
     for path, current in sorted(measured.items()):
         base = base_files.get(path, {})
         base_funcs = base.get("functions", {})
+        if path in base_files and "ticket_refs" not in base:
+            # A baseline written before this metric existed grants nothing
+            # and forbids nothing for it until `update-baseline`.
+            current = dict(current, ticket_refs=None)
         entities = [(None, current, base, _FILE_CHECKS)]
         entities.extend((name, func, base_funcs.get(name, {}), _FUNC_CHECKS)
                         for name, func in sorted(current["functions"].items()))
@@ -426,14 +562,15 @@ def _entity_violations(path, entity, values, base_values, checks, thresholds):
     check, same ceiling rule (`ceiling`/`exceeds`) either way."""
     out = []
     for label, key, tkey in checks:
-        value = values[key]
+        value = values.get(key)
         # `nesting` is `None` for a language never verified safe to trust
         # lizard's nesting reader for (or an unmatched Python row) -- not
-        # checked at all, never checked against a wrong number. File checks
-        # never see `None` here, so this guards the function checks only.
+        # checked at all, never checked against a wrong number. `ticket_refs`
+        # is `None` for a language with no comment reader, a Python file that
+        # does not parse, or a file whose baseline predates the metric.
         if value is None:
             continue
-        warn = thresholds[tkey]["warn"]
+        warn = _FIXED_WARN[tkey] if tkey in _FIXED_WARN else thresholds[tkey]["warn"]
         limit = ceiling(base_values.get(key), warn)
         if exceeds(value, limit):
             out.append({
@@ -496,7 +633,8 @@ def report_drift(moved):
 
 
 # Which numbers a baseline diff compares, per entity kind.
-_FILE_MOVES = (("file lines", "lines"), ("estimated tokens", "tokens"))
+_FILE_MOVES = (("file lines", "lines"), ("estimated tokens", "tokens"),
+               ("tracker keys in comments", "ticket_refs"))
 _FUNC_MOVES = (("function lines", "lines"), ("cyclomatic complexity", "ccn"),
                ("parameters", "params"), ("nesting depth", "nesting"))
 _MAX_LISTED_MOVES = 20
@@ -560,9 +698,9 @@ def report_baseline_moves(previous, current, moves):
 
 
 def write_baseline(repo_root, target, settings):
-    thresholds, chars_per_token, exclude = settings
+    thresholds, chars_per_token, exclude, ticket_ignore = settings
     files, had_lizard = measure(repo_root, _all_supported(repo_root, exclude),
-                                chars_per_token)
+                                chars_per_token, ticket_ignore)
     if not had_lizard:
         sys.stderr.write("code-health guard: lizard not available\n")
         return 2
@@ -593,7 +731,7 @@ def main(argv=None):
 
     repo_root = Path(args.repo).resolve()
     settings = settings_for(repo_root)
-    thresholds, chars_per_token, exclude = settings
+    thresholds, chars_per_token, exclude, ticket_ignore = settings
 
     if args.baseline:
         return write_baseline(repo_root, args.baseline, settings)
@@ -618,7 +756,7 @@ def main(argv=None):
         report_drift(drift)
     if not targets:
         return 0
-    measured, had_lizard = measure(repo_root, targets, chars_per_token)
+    measured, had_lizard = measure(repo_root, targets, chars_per_token, ticket_ignore)
     if not had_lizard:
         print("code-health guard: lizard unavailable; file sizes checked only")
     violations = compare(measured, baseline, thresholds)

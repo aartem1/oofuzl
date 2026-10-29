@@ -8,6 +8,8 @@ from helpers import load_package
 load_package()
 from code_health import comments as CM  # noqa: E402
 from comment_corpus import CORPUS  # noqa: E402
+from comment_history_sample import (  # noqa: E402
+    HISTORY_NOTE_SAMPLE, TICKET_REF_SAMPLE)
 
 
 class PythonExtractionTests(unittest.TestCase):
@@ -125,9 +127,8 @@ class ImmunityTests(unittest.TestCase):
         "FIXME later",
         "Copyright 2026 Acme",
         "SPDX-License-Identifier: MIT",
-        "see #1234 for the original report",
         "see https://bugs.example/1 for why",
-        "see RAM-436",
+        "see https://jira.example.com/browse/RAM-436",
         "-*- coding: utf-8 -*-",
         "!/usr/bin/env python3",
     ]
@@ -150,6 +151,10 @@ class ImmunityTests(unittest.TestCase):
         "none of the retries succeeded",
         "reads utf-8 from disk",
         " ".join(["word"] * 29),
+        # A tracker key used to make the whole comment immune; it is now the
+        # `ticket_ref` class's evidence, not a reason to skip the comment.
+        "see #1234 for the original report",
+        "see RAM-436",
     ]
 
     def test_directive_texts_are_directives(self):
@@ -816,8 +821,9 @@ class ClassifyFileTests(unittest.TestCase):
                          ["alpha", "beta", "gamma"])
 
     def test_zero_coherence_never_counts_as_noise(self):
-        got = CM.classify_file("# see #42 for the reason\ndef flush():\n    pass\n",
-                               ".py")
+        got = CM.classify_file(
+            "# see https://bugs.example/42 for the reason\ndef flush():\n    pass\n",
+            ".py")
         self.assertEqual(got["evidence"]["zero_coherence"], [])
         self.assertEqual(got["evidence"]["immune"], 1)
 
@@ -827,7 +833,8 @@ class CorpusPrecisionTests(unittest.TestCase):
         got = CM.classify_file(source, ext)
         if got is None:
             return "unreadable"
-        for klass in ("commented_out", "trivial_doc", "short_inline"):
+        for klass in ("ticket_ref", "commented_out", "trivial_doc",
+                      "short_inline"):
             bucket = got["evidence"].get(klass)
             if bucket and bucket["count"]:
                 return klass
@@ -1018,6 +1025,181 @@ class LayerTests(unittest.TestCase):
         self.assertIn("no source file has a verified comment reader",
                       layer["reason"])
         self.assertEqual(layer["files"], [])
+
+    def test_totals_sum_the_files(self):
+        self._write("a.py", "# ABC-1: fix\nx = 1\n")
+        self._write("b.py", "# раньше тут был кэш\ny = 2  # see ABC-2\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py", "b.py"]), self.cfg)
+        totals = layer["totals"]
+        self.assertEqual(totals["ticket_ref"], 2)
+        self.assertEqual(totals["files_with_ticket_ref"], 2)
+        self.assertEqual(totals["history_note"], 1)
+        self.assertEqual(totals["comment_lines"], 3)
+        self.assertEqual(totals["lines"], 4)
+        self.assertEqual(totals["noise_comment_lines"],
+                         sum(r["noise_comment_lines"] for r in layer["files"]))
+
+    def test_configured_prefixes_are_not_tracker_keys(self):
+        self._write("a.py", "# read off the TIER-2 unit\nx = 1\n")
+        cfg = dict(self.cfg, ticket_ref_ignore=["TIER"])
+        layer = CM.measure_comments(self.root, _Inventory(["a.py"]), cfg)
+        self.assertEqual(layer["files"][0]["evidence"]["ticket_ref"]["count"], 0)
+
+
+class TicketRefTests(unittest.TestCase):
+    def _lines(self, src, ext=".py", **kw):
+        return CM.classify_file(src, ext, **kw)["evidence"]["ticket_ref"]["lines"]
+
+    def test_a_key_is_no_longer_a_directive(self):
+        self.assertFalse(CM.is_directive("ABC-123: hide the banner"))
+        self.assertFalse(CM.is_directive("see issue #10072"))
+
+    def test_links_and_tool_directives_stay_immune(self):
+        for text in ("see https://jira.example.com/browse/ABC-1",
+                     "noqa: E501", "eslint-disable-next-line", "type: ignore"):
+            with self.subTest(text=text):
+                self.assertTrue(CM.is_directive(text))
+
+    def test_a_key_in_a_comment_is_counted(self):
+        got = CM.classify_file("x = 1  # ABC-123: keep the old order\n", ".py")
+        self.assertEqual(got["evidence"]["ticket_ref"]["lines"], [1])
+        self.assertEqual(got["noise_comment_lines"], 1)
+
+    def test_only_the_physical_line_with_the_key_counts(self):
+        src = ('def load():\n'
+               '    """Load the rows.\n'
+               '\n'
+               '    Ordering matters here (ABC-42).\n'
+               '    """\n'
+               '    return []\n')
+        self.assertEqual(self._lines(src), [4])
+        src = "# first line\n# second ABC-7\n# third\nx = 1\n"
+        self.assertEqual(self._lines(src), [2])
+
+    def test_a_key_in_a_block_comment_is_counted_in_a_brace_language(self):
+        src = "/*\n * Totals per team.\n * Moved here in WEB-12.\n */\nlet x = 1;\n"
+        self.assertEqual(self._lines(src, ".ts"), [3])
+
+    def test_a_key_in_code_is_not_a_comment(self):
+        self.assertEqual(self._lines('KEY = "ABC-123"  # the probe key\n'), [])
+
+    def test_a_key_inside_a_link_is_not_counted(self):
+        self.assertEqual(
+            self._lines("x = 1  # https://jira.example.com/browse/ABC-1\n"), [])
+
+    def test_a_todo_may_name_its_ticket(self):
+        self.assertEqual(self._lines("# TODO(ABC-12): drop the fallback\nx = 1\n"), [])
+
+    def test_standards_are_not_tracker_keys(self):
+        for text in ("UTF-8 BOM", "ISO-8601 dates", "SHA-256 hex", "Q3-2025 plan",
+                     "per RFC-4648", "PEP-8 says so", "CVE-2021-44228"):
+            with self.subTest(text=text):
+                self.assertEqual(CM.ticket_refs(text), [])
+
+    def test_a_character_class_is_not_a_key(self):
+        # `[A-Z0-9]+` in a regex or its prose description read as `Z0-9`.
+        self.assertEqual(CM.ticket_refs("keys match [A-Z][A-Z0-9]+-\\d+"), [])
+        self.assertEqual(CM.ticket_refs("letters A-Z0-9 only"), [])
+
+    def test_a_bare_number_sign_needs_a_marker_word(self):
+        self.assertEqual(CM.ticket_refs("hover color #333"), [])
+        self.assertEqual(CM.ticket_refs("step #2 of the wizard"), [])
+        self.assertEqual(CM.ticket_refs("fixes #412"), ["fixes #412"])
+        self.assertEqual(CM.ticket_refs("PR #88 split this"), ["PR #88"])
+
+    def test_ignore_list_is_applied(self):
+        self.assertEqual(CM.ticket_refs("TIER-2 unit", ignore={"TIER"}), [])
+        self.assertEqual(self._lines("# TIER-2\nx = 1\n", ticket_ignore={"TIER"}), [])
+
+    def test_a_line_both_trivial_and_a_ticket_ref_counts_once(self):
+        src = "# reset counter ABC-9\ndef reset_counter():\n    pass\n"
+        got = CM.classify_file(src, ".py")
+        self.assertEqual(got["evidence"]["trivial_doc"]["lines"], [1])
+        self.assertEqual(got["evidence"]["ticket_ref"]["lines"], [1])
+        self.assertEqual(got["noise_comment_lines"], 1)
+
+    def test_ticket_ref_is_a_counted_class(self):
+        self.assertIn("ticket_ref", CM.COUNTED_CLASSES)
+
+    def test_precision_on_the_labelled_sample(self):
+        flagged = [(text, truth) for text, truth in TICKET_REF_SAMPLE
+                   if CM.ticket_refs(text)]
+        true_hits = sum(1 for _, truth in flagged if truth)
+        precision = true_hits / len(flagged)
+        self.assertGreaterEqual(precision, 0.85, flagged)
+        # The bar must be crossable: the sample keeps its known misses.
+        self.assertLess(precision, 1.0)
+
+    def test_recall_on_the_labelled_sample(self):
+        missed = [text for text, truth in TICKET_REF_SAMPLE
+                  if truth and not CM.ticket_refs(text)]
+        self.assertEqual(missed, [])
+
+
+class HistoryNoteTests(unittest.TestCase):
+    def test_history_is_evidence_and_never_counted(self):
+        got = CM.classify_file("# раньше тут был кэш\nx = 1\n", ".py")
+        self.assertEqual(got["evidence"]["history_note"]["lines"], [1])
+        self.assertEqual(got["noise_comment_lines"], 0)
+        self.assertNotIn("history_note", CM.COUNTED_CLASSES)
+
+    def test_history_is_found_inside_long_prose(self):
+        # The 30-word rule spares long prose from the prose detectors; a
+        # history paragraph is exactly that shape, so it must still be seen.
+        text = " ".join(["word"] * 30) + " and it used to live in utils"
+        got = CM.classify_file("# %s\nx = 1\n" % text, ".py")
+        self.assertEqual(got["evidence"]["history_note"]["lines"], [1])
+
+    def test_english_and_russian_shapes(self):
+        for text in ("this used to live in utils", "previously a global",
+                     "moved out of main.py", "the old code path",
+                     "теперь читает из кэша", "переехал из utils",
+                     "как было до правки"):
+            with self.subTest(text=text):
+                self.assertTrue(CM.is_history_note(text))
+
+    def test_present_tense_wording_is_not_history(self):
+        for text in ("сдвигать было нечего", "only used to filter",
+                     "no longer than X", "what is happening now",
+                     "окно кончается раньше даты синхронизации",
+                     "remove after migration", "ранее выбранной услуги"):
+            with self.subTest(text=text):
+                self.assertFalse(CM.is_history_note(text))
+
+    def test_precision_on_the_labelled_sample(self):
+        flagged = [(text, truth) for text, truth in HISTORY_NOTE_SAMPLE
+                   if CM.is_history_note(text)]
+        precision = sum(1 for _, truth in flagged if truth) / len(flagged)
+        self.assertGreaterEqual(precision, 0.85, flagged)
+        self.assertLess(precision, 1.0)
+
+    def test_recall_on_the_labelled_sample(self):
+        # Evidence-only, so recall is traded for precision; the sample keeps
+        # the history shapes the patterns leave out.
+        truths = [text for text, truth in HISTORY_NOTE_SAMPLE if truth]
+        found = [text for text in truths if CM.is_history_note(text)]
+        self.assertGreaterEqual(len(found) / len(truths), 0.85)
+        self.assertLess(len(found), len(truths))
+
+
+class DensityTests(unittest.TestCase):
+    def test_density_counts_comment_lines_against_non_blank_lines(self):
+        src = ('"""Module."""\n'
+               '\n'
+               '# one\n'
+               '# two\n'
+               'x = 1  # three\n'
+               'y = 2\n')
+        density = CM.classify_file(src, ".py")["evidence"]["density"]
+        self.assertEqual(density, {"comment_lines": 4, "lines": 5, "ratio": 0.8})
+
+    def test_a_file_without_comments_has_zero_density(self):
+        density = CM.classify_file("x = 1\n", ".py")["evidence"]["density"]
+        self.assertEqual(density, {"comment_lines": 0, "lines": 1, "ratio": 0.0})
+
+    def test_an_empty_file_has_no_ratio(self):
+        density = CM.classify_file("", ".py")["evidence"]["density"]
+        self.assertEqual(density, {"comment_lines": 0, "lines": 0, "ratio": None})
 
 
 if __name__ == "__main__":

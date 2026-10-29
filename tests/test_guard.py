@@ -231,6 +231,65 @@ class FunctionRatchetTests(RatchetTests):
         self.assertEqual(out.returncode, 0, out.stdout)
 
 
+class TicketRefRatchetTests(RatchetTests):
+    """Tracker keys in comments: a file-level metric with a fixed warn of 1."""
+
+    def put(self, rel, text):
+        (self.root / rel).write_text(text, encoding="utf-8")
+        return rel
+
+    def test_a_new_file_with_a_key_in_a_comment_fails(self):
+        self.baseline({})
+        self.put("new.py", "x = 1  # ABC-123: keep the order\n")
+        out = run_guard("new.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("tracker keys in comments", out.stdout)
+
+    def test_a_new_file_without_keys_passes(self):
+        self.baseline({})
+        self.put("new.py", 'KEY = "ABC-1"  # the probe key, see https://t.example/ABC-2\n')
+        self.assertEqual(run_guard("new.py", cwd=self.root).returncode, 0)
+
+    def test_an_old_file_may_keep_its_keys_but_not_add_one(self):
+        self.baseline({"a.py": {"lines": 3, "tokens": 30, "ticket_refs": 1,
+                                "functions": {}}})
+        self.put("a.py", "# ABC-1 one\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
+        self.put("a.py", "# ABC-1 one\n# ABC-2 two\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 1)
+
+    def test_a_baseline_written_before_the_metric_does_not_check_it(self):
+        self.baseline({"a.py": {"lines": 3, "tokens": 30, "functions": {}}})
+        self.put("a.py", "# ABC-1 one\n# ABC-2 two\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
+
+    def test_a_brace_file_is_checked_too(self):
+        self.baseline({})
+        self.put("a.ts", "/*\n * Totals per team (WEB-12).\n */\nlet x = 1;\n")
+        self.assertEqual(run_guard("a.ts", cwd=self.root).returncode, 1)
+
+    def test_configured_prefixes_are_not_keys(self):
+        self.baseline({})
+        (self.root / ".code-health" / "config.json").write_text(
+            json.dumps({"ticket_ref_ignore": ["TIER"]}))
+        self.put("a.py", "# read off the TIER-2 unit\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
+
+    def test_a_language_without_a_comment_reader_is_not_checked(self):
+        self.baseline({})
+        self.put("a.rb", "# ABC-1\nx = 1\n")
+        files, _ = load_guard().measure(self.root, ["a.rb"], 4)
+        self.assertIsNone(files["a.rb"]["ticket_refs"])
+
+    def test_the_baseline_records_the_count_and_reports_its_moves(self):
+        guard = load_guard()
+        worse, _ = guard.baseline_moves(
+            {"a.py": {"lines": 1, "tokens": 1, "ticket_refs": 0, "functions": {}}},
+            {"a.py": {"lines": 1, "tokens": 1, "ticket_refs": 2, "functions": {}}})
+        self.assertEqual([(r["metric"], r["from"], r["to"]) for r in worse],
+                         [("tracker keys in comments", 0, 2)])
+
+
 class BaselineTests(RatchetTests):
     def test_baseline_write_covers_files_and_functions(self):
         (self.root / "a.py").write_text("def f(a):\n    return a\n", encoding="utf-8")

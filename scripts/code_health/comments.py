@@ -8,8 +8,8 @@ therefore reported in evidence only -- summing three classes would give the
 whole metric the precision of its weakest member.
 
 Two immunity passes, not one, because they protect different things.
-`is_directive` -- tool directives, task tags, licence text, issue references
-and URLs, shebang and coding declarations -- gates EVERY detector,
+`is_directive` -- tool directives, task tags, licence text, URLs, shebang and
+coding declarations -- gates EVERY detector,
 `commented_out` included. `is_prose_immune` -- the 30-word rule, reason words,
 units, range bounds, null-value wording and ownership verbs -- gates only the
 prose detectors, because commented-out code is code: `# return None` is a
@@ -17,6 +17,12 @@ return statement, not documentation of null semantics, and only the directive
 half may excuse it. Steidl and Pascarella independently measured that licence
 headers, task tags and tool directives make up most of a repository's comment
 volume; without the directive pass this module measures copyright.
+
+Two line-level classes run beside the detectors, over every comment whatever
+its immunity: `ticket_ref` (counted) and `history_note` (evidence only). A
+tracker key or a story about past code is noise on its own line however
+informative the rest of the comment is, so neither may hide behind the
+30-word rule or a reason word.
 """
 
 import ast
@@ -155,7 +161,7 @@ _DIRECTIVE_PATTERNS = (
     r"|\bruff:\s|\bmypy:",
     r"\bTODO\b|\bFIXME\b|\bXXX\b|\bHACK\b",
     r"\bcopyright\b|\blicen[sc]e\b|(?-i:\bSPDX\b)",
-    r"#\d+|(?-i:\b[A-Z]{2,}-\d+\b)|https?://",
+    r"https?://",
     r"^#?!/|-\*-\s*coding",
 )
 _DIRECTIVE_RE = re.compile("|".join("(?:%s)" % p for p in _DIRECTIVE_PATTERNS),
@@ -185,7 +191,7 @@ LONG_COMMENT_WORDS = 30
 # precision of the weakest one.
 SHORT_INLINE_WORDS = 2
 
-COUNTED_CLASSES = ("commented_out", "trivial_doc")
+COUNTED_CLASSES = ("commented_out", "trivial_doc", "ticket_ref")
 
 # eradicate v3.0.1's pipeline. The final step is a real `ast.parse`, which is
 # why this class is the most accurate of the three; everything above it exists
@@ -225,6 +231,73 @@ def is_prose_immune(text):
     if len(words_of(text)) >= LONG_COMMENT_WORDS:
         return True
     return bool(_PROSE_RE.search(text))
+
+
+# A bare tracker key opens only for a reader who has that tracker and the
+# context of that task; a link opens for anyone, so a key inside a URL is not
+# counted and the URL itself stays a directive. A TODO is the one place a key
+# belongs: it names work that is not in the code yet.
+# The lookbehind refuses a regex character class: `[A-Z0-9]` read as `Z0-9`.
+_TICKET_KEY_RE = re.compile(r"(?<![-\[])\b([A-Z][A-Z0-9]+)-\d+\b")
+# A bare `#333` is a colour and `#2` a list item, so a number sign counts only
+# after a word that makes it an issue.
+_ISSUE_NUMBER_RE = re.compile(
+    r"\b(?:issues?|pr|pull|bug|fix(?:es|ed)?|close[sd]?|resolve[sd]?|see"
+    r"|задач[аеиуой]?|тикет[аеуом]?)\s*#\d+\b", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+")
+_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
+# Public identifiers shaped like a key: encodings, standards, digests, CVEs.
+# A repository's own domain terms (`TIER-2`) go in `ticket_ref_ignore`.
+NOT_A_TRACKER = frozenset({
+    "UTF", "UCS", "ISO", "IEC", "IEEE", "ANSI", "ECMA", "ES", "RFC", "PEP",
+    "CVE", "CWE", "SHA", "MD", "AES", "RSA", "HMAC", "CRC", "KOI", "CP", "WIN",
+    "WINDOWS", "LATIN", "ASCII", "BASE", "HTTP", "TLS", "SSL", "IPV", "HTML",
+    "CSS", "JSON", "PKCS", "X", "Q1", "Q2", "Q3", "Q4", "H", "COVID", "GPT",
+})
+
+
+def ticket_refs(line, ignore=frozenset()):
+    """Tracker references on one comment line, outside links and task tags."""
+    if _TASK_TAG_RE.search(line):
+        return []
+    line = _URL_RE.sub(" ", line)
+    keys = [m.group(0) for m in _TICKET_KEY_RE.finditer(line)
+            if m.group(1) not in NOT_A_TRACKER and m.group(1) not in ignore]
+    return keys + [m.group(0) for m in _ISSUE_NUMBER_RE.finditer(line)]
+
+
+# The code's past instead of its meaning. `было`, `was`, `now`, `ранее`,
+# `больше не` and `no longer` are left out: on live code they mostly describe
+# present behaviour ("сдвигать было нечего", "ранее выбранной услуги"). So is
+# "after the migration": in a comment it is nearly always a plan ("remove after
+# migration"), not a story. `раньше` counts only where it means "previously" --
+# opening a clause, after `как`, or before what used to be -- because as a
+# comparative ("начался раньше", "раньше, чем") it is a fact about time.
+_HISTORY_PATTERNS = (
+    r"(?:^|[.:;!?—(«]\s*)раньше\b(?!,?\s*чем)|\bкак\s+(?:и\s+)?раньше\b"
+    r"|\bраньше\s+(?:был\w*|это|здесь|тут|так|оба|отсюда|он[аио]?)\b",
+    r"\bтеперь\b|\bкак было\b",
+    r"\bпереехал[аои]?\b|\bперенесл[аио]\b|\bперенес[её]н[аоы]?\b",
+    r"\bдо\s+(?:правки|фикса|рефакторинга|миграции|переезда|переделки"
+    r"|исправления)\b",
+    r"\bстар(?:ый|ая|ое|ого|ой|ом)\s+(?:код|логик|реализаци|верси|вариант)",
+    r"\bpreviously\b(?!\s+\w+ed\b)|\bformerly\b",
+    r"(?<!\bis )(?<!\bare )(?<!\bbe )(?<!\bwas )(?<!\bwere )(?<!\bonly )"
+    r"(?<!\balso )\bused to\b",
+    r"\b(?:was|were|has been|have been)\s+(?:moved|extracted|rewritten"
+    r"|inlined|reverted)\b",
+    r"\bmoved\s+(?:out of|from|here|over)\b|\brenamed from\b",
+    r"\bthe old (?:code|logic|implementation|version|behaviou?r)\b",
+    r"\b(?:before|since)\s+(?:the\s+)?(?:[\w-]+\s+)?"
+    r"(?:fix|refactor\w*|migration|rewrite)\b",
+)
+_HISTORY_RE = re.compile("|".join("(?:%s)" % p for p in _HISTORY_PATTERNS),
+                         re.IGNORECASE | re.MULTILINE)
+
+
+def is_history_note(line):
+    """True when a comment line tells what the code used to be."""
+    return bool(_HISTORY_RE.search(line))
 
 
 def is_commented_out(text):
@@ -610,14 +683,54 @@ def declarations(text, ext):
     return {}
 
 
-def classify_file(text, ext, chars_per_token=4):
+def _physical_lines(item, src_lines):
+    """`(line number, text)` for each source line a comment record covers.
+
+    A record's `text` has markers stripped and, for a docstring or a block
+    comment, blank lines dropped, so its lines no longer map to source lines.
+    An own-line record is read back from the source instead; an inline one
+    keeps its own text, because its source line also carries code, and a key
+    in a string literal there is not a comment.
+    """
+    if item.inline and item.line == item.end_line:
+        return [(item.line, item.text)]
+    return [(n, src_lines[n - 1])
+            for n in range(item.line, min(item.end_line, len(src_lines)) + 1)]
+
+
+def _line_classes(found, text, ticket_ignore):
+    """Lines carrying a tracker reference, history lines, all comment lines,
+    and the characters of the references."""
+    src_lines = text.splitlines()
+    refs, history, covered, ref_chars = set(), set(), set(), 0
+    for item in found:
+        for number, line in _physical_lines(item, src_lines):
+            covered.add(number)
+            keys = ticket_refs(line, ticket_ignore)
+            if keys:
+                refs.add(number)
+                ref_chars += sum(len(k) for k in keys)
+            if is_history_note(line):
+                history.add(number)
+    return refs, history, covered, ref_chars
+
+
+def _density(covered, text):
+    lines = sum(1 for line in text.splitlines() if line.strip())
+    return {"comment_lines": len(covered), "lines": lines,
+            "ratio": round(len(covered) / lines, 2) if lines else None}
+
+
+def classify_file(text, ext, chars_per_token=4, ticket_ignore=frozenset()):
     """One file's comment classes, or None when no reader covers `ext`."""
     found = extract(text, ext)
     if found is None:
         return None
     decls = declarations(text, ext)
-    buckets = {"commented_out": [], "trivial_doc": [], "short_inline": []}
-    zero, noise_chars, immune = [], 0, 0
+    refs, history, covered, ref_chars = _line_classes(found, text, ticket_ignore)
+    buckets = {"commented_out": [], "trivial_doc": [], "short_inline": [],
+               "ticket_ref": sorted(refs), "history_note": sorted(history)}
+    zero, noise_chars, immune = [], ref_chars, 0
 
     for item in found:
         # Directives (eradicate's whitelist) gate every detector, including
@@ -673,18 +786,34 @@ def classify_file(text, ext, chars_per_token=4):
             noise_chars += len(item.text)
 
     evidence = {"tokens": -(-noise_chars // chars_per_token), "immune": immune,
-                "zero_coherence": zero}
+                "zero_coherence": zero, "density": _density(covered, text)}
     for klass, lines in buckets.items():
         if klass == "commented_out" and ext != ".py":
             evidence[klass] = None
             continue
         evidence[klass] = {"lines": sorted(lines), "count": len(lines)}
 
+    # A union, not a sum: `ticket_ref` is a line-level class and can share a
+    # line with a detector's verdict.
+    noise = set()
+    for klass in COUNTED_CLASSES:
+        if evidence.get(klass) is not None:
+            noise.update(buckets[klass])
+    return {"noise_comment_lines": len(noise), "evidence": evidence}
+
+
+def _totals(rows):
+    """Repository-wide sums the audit report quotes."""
+    def total(pick):
+        return sum(pick(row) for row in rows)
     return {
-        "noise_comment_lines": sum(
-            len(buckets[k]) for k in COUNTED_CLASSES
-            if evidence.get(k) is not None),
-        "evidence": evidence,
+        "noise_comment_lines": total(lambda r: r["noise_comment_lines"]),
+        "ticket_ref": total(lambda r: r["evidence"]["ticket_ref"]["count"]),
+        "files_with_ticket_ref": total(
+            lambda r: 1 if r["evidence"]["ticket_ref"]["count"] else 0),
+        "history_note": total(lambda r: r["evidence"]["history_note"]["count"]),
+        "comment_lines": total(lambda r: r["evidence"]["density"]["comment_lines"]),
+        "lines": total(lambda r: r["evidence"]["density"]["lines"]),
     }
 
 
@@ -700,6 +829,7 @@ def measure_comments(repo_root, inventory, cfg):
     if not inventory.source:
         no_source = 1
     chars_per_token = cfg["chars_per_token"]
+    ticket_ignore = frozenset(cfg.get("ticket_ref_ignore") or ())
     for rel in inventory.source:
         ext = os.path.splitext(rel)[1].lower()
         if ext != ".py" and ext not in BRACE_EXT:
@@ -710,7 +840,7 @@ def measure_comments(repo_root, inventory, cfg):
         except OSError:
             unreadable += 1
             continue
-        got = classify_file(text, ext, chars_per_token)
+        got = classify_file(text, ext, chars_per_token, ticket_ignore)
         if got is None:
             unparsed += 1
             continue
@@ -738,7 +868,8 @@ def measure_comments(repo_root, inventory, cfg):
         reasons.append("commented_out is Python-only and this repository has "
                        "no measured Python file")
 
-    layer = {"files": rows, "languages_measured": sorted(langs),
+    layer = {"files": rows, "totals": _totals(rows),
+             "languages_measured": sorted(langs),
              "not_measured_files": no_reader + unreadable + unparsed,
              "reason": "; ".join(reasons) or None}
     if not rows:

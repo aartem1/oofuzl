@@ -30,11 +30,10 @@ CORPUS = [
 
     # --- commented_out: false positives to stay clean (ERA) -------------
     ("# TODO: drop print(x) after RAM-436\nx = 1\n", ".py", "clean"),
-    ("# see issue #10072 for the failing example\nx = 1\n", ".py", "clean"),
-    # Same directive pattern as the row above (#<digits>); moved here from
-    # the short_inline group, where it stood beside genuinely prose-immune
-    # rows without itself being one -- it is directive-immune, not prose-immune.
-    ("x = 1  # see #42\n", ".py", "clean"),
+    # An issue number is no longer a directive: these two are not
+    # commented-out code, but they are tracker references.
+    ("# see issue #10072 for the failing example\nx = 1\n", ".py", "ticket_ref"),
+    ("x = 1  # see #42\n", ".py", "ticket_ref"),
     ("# /// script\n# requires-python = \">=3.11\"\n# ///\nx = 1\n", ".py", "clean"),
     ("# ruff: ignore[E501]\nx = 1\n", ".py", "clean"),
     ("# -*- coding: utf-8 -*-\nx = 1\n", ".py", "clean"),

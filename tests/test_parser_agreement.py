@@ -309,3 +309,53 @@ class NestingAgreementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Every shape the two comment readers must agree on: own-line, inline and
+# merged `#` comments, docstrings, a key in code, in a link and under a TODO,
+# `//` and `/* */` own-line and inline, an unterminated block at EOF.
+TICKET_REF_SOURCES = [
+    ("a.py", '"""Module (ABC-1)."""\n'
+             '# one ABC-2\n# two\n# three SEG-07\n'
+             'KEY = "ABC-3"  # see #12\n'
+             'x = 1  # https://t.example/ABC-4\n'
+             '# TODO(ABC-5): later\n'
+             'def f():\n    """Load.\n\n    Ordering (ABC-6).\n    """\n'),
+    ("a.ts", '// ABC-1 own line\n'
+             'const k = "ABC-2"; // inline WEB-3\n'
+             '/*\n * Totals (WEB-4).\n * more\n */\n'
+             'let y = 1; /* fixes #9 */\n'
+             'const re = /[A-Z0-9]+/; // keys look like [A-Z0-9]+-1\n'
+             '/* unterminated WEB-5'),
+    ("a.py", "x = = 1  # ABC-1\n"),
+    ("a.rb", "# ABC-1\n"),
+]
+
+
+class TicketRefAgreementTests(unittest.TestCase):
+    """guard.py's comment reader is a copy of comments.py's, for the same
+    reason the nesting pass is; the ratchet and the audit must count the
+    same lines."""
+
+    def test_both_count_the_same_lines(self):
+        from code_health import comments as CM
+        guard = load_guard()
+        for name, text in TICKET_REF_SOURCES:
+            ext = Path(name).suffix
+            got = CM.classify_file(text, ext)
+            mine = None if got is None else got["evidence"]["ticket_ref"]["count"]
+            with self.subTest(source=text[:30]):
+                self.assertEqual(mine, guard.count_ticket_refs(text, ext))
+
+    def test_the_fixture_exercises_both_readers(self):
+        guard = load_guard()
+        self.assertEqual(guard.count_ticket_refs(TICKET_REF_SOURCES[0][1], ".py"), 5)
+        self.assertEqual(guard.count_ticket_refs(TICKET_REF_SOURCES[1][1], ".ts"), 5)
+
+    def test_both_use_the_same_vocabulary(self):
+        from code_health import comments as CM
+        guard = load_guard()
+        self.assertEqual(CM.NOT_A_TRACKER, guard.NOT_A_TRACKER)
+        self.assertEqual(set(CM.BRACE_EXT), set(guard.BRACE_EXT))
+        for name in ("_TICKET_KEY_RE", "_ISSUE_NUMBER_RE", "_URL_RE", "_TASK_TAG_RE"):
+            self.assertEqual(getattr(CM, name).pattern, getattr(guard, name).pattern)

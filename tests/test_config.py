@@ -76,6 +76,16 @@ class LoadConfigTests(unittest.TestCase):
         with self.assertRaises(C.ConfigError):
             C.load_config(self._repo({"thresholds": {"file_lines": {"warn": 900}}}))
 
+    def test_ticket_ref_ignore_defaults_to_empty_and_accepts_prefixes(self):
+        self.assertEqual(C.load_config(self._repo())["ticket_ref_ignore"], [])
+        cfg = C.load_config(self._repo({"ticket_ref_ignore": ["TIER"]}))
+        self.assertEqual(cfg["ticket_ref_ignore"], ["TIER"])
+
+    def test_ticket_ref_ignore_must_be_a_list_of_strings(self):
+        for bad in ("TIER", [2], {"TIER": True}):
+            with self.subTest(bad=bad), self.assertRaises(C.ConfigError):
+                C.load_config(self._repo({"ticket_ref_ignore": bad}))
+
 
 class TokenEstimateTests(unittest.TestCase):
     def test_exact_multiple(self):

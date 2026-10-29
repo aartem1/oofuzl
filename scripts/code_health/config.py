@@ -40,6 +40,8 @@ DEFAULTS = {
     "near_duplicate": {"min_similarity": 0.60, "min_tokens": 40},
     "collision_min_files": 3,
     "gate": None,
+    # Key prefixes that are domain terms here, not tracker keys (`TIER-2`).
+    "ticket_ref_ignore": [],
 }
 
 # Cuts reported in summary.by_cut: the two file_lines thresholds plus a round
@@ -71,6 +73,9 @@ def _validate(user):
     unknown = set(user) - set(DEFAULTS)
     if unknown:
         raise ConfigError("unknown config keys: %s" % ", ".join(sorted(unknown)))
+    ignore = user.get("ticket_ref_ignore", [])
+    if not (isinstance(ignore, list) and all(isinstance(x, str) for x in ignore)):
+        raise ConfigError("ticket_ref_ignore must be a list of key prefixes")
     thresholds = user.get("thresholds", {})
     if not isinstance(thresholds, dict):
         raise ConfigError("thresholds must be an object")
