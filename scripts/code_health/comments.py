@@ -236,23 +236,27 @@ def is_prose_immune(text):
 # A bare tracker key opens only for a reader who has that tracker and the
 # context of that task; a link opens for anyone, so a key inside a URL is not
 # counted and the URL itself stays a directive. A TODO is the one place a key
-# belongs: it names work that is not in the code yet.
+# belongs: it names work that is not in the code yet. The tag is matched in
+# capitals only, so "the todo list" in prose does not excuse a key.
 # The lookbehind refuses a regex character class: `[A-Z0-9]` read as `Z0-9`.
-_TICKET_KEY_RE = re.compile(r"(?<![-\[])\b([A-Z][A-Z0-9]+)-\d+\b")
+_TICKET_KEY_RE = re.compile(r"(?<!-)\b([A-Z][A-Z0-9]+)-\d+\b")
 # A bare `#333` is a colour and `#2` a list item, so a number sign counts only
 # after a word that makes it an issue.
 _ISSUE_NUMBER_RE = re.compile(
     r"\b(?:issues?|pr|pull|bug|fix(?:es|ed)?|close[sd]?|resolve[sd]?|see"
     r"|задач[аеиуой]?|тикет[аеуом]?)\s*#\d+\b", re.IGNORECASE)
 _URL_RE = re.compile(r"https?://\S+")
-_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
-# Public identifiers shaped like a key: encodings, standards, digests, CVEs.
+_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b")
+# Public identifiers shaped like a key: encodings, standards, digests, CVEs,
+# and the bounds of C-style arithmetic in prose (`SIZE-1`, `MAX-1`).
 # A repository's own domain terms (`TIER-2`) go in `ticket_ref_ignore`.
 NOT_A_TRACKER = frozenset({
     "UTF", "UCS", "ISO", "IEC", "IEEE", "ANSI", "ECMA", "ES", "RFC", "PEP",
     "CVE", "CWE", "SHA", "MD", "AES", "RSA", "HMAC", "CRC", "KOI", "CP", "WIN",
     "WINDOWS", "LATIN", "ASCII", "BASE", "HTTP", "TLS", "SSL", "IPV", "HTML",
-    "CSS", "JSON", "PKCS", "X", "Q1", "Q2", "Q3", "Q4", "H", "COVID", "GPT",
+    "CSS", "JSON", "PKCS", "Q1", "Q2", "Q3", "Q4", "COVID", "GPT", "X86",
+    "SHA3", "MPEG", "RS", "DDR", "SIZE", "LEN", "LENGTH", "MAX", "MIN", "COUNT",
+    "IDX", "NUM",
 })
 
 
@@ -519,6 +523,8 @@ def _skip_literal(text, i, line):
     while i < n:
         ch = text[i]
         if ch == "\\":
+            if text[i + 1:i + 2] == "\n":
+                line += 1
             i += 2
             continue
         if ch == "\n":
@@ -701,15 +707,17 @@ def _physical_lines(item, src_lines):
 def _line_classes(found, text, ticket_ignore):
     """Lines carrying a tracker reference, history lines, all comment lines,
     and the characters of the references."""
-    src_lines = text.splitlines()
-    refs, history, covered, ref_chars = set(), set(), set(), 0
+    # Split on "\n" only, as the tokenizer counts lines: `splitlines` also
+    # breaks on a form feed and would shift every line after it.
+    src_lines = text.split("\n")
+    refs, history, covered, ref_chars = set(), set(), set(), {}
     for item in found:
         for number, line in _physical_lines(item, src_lines):
             covered.add(number)
             keys = ticket_refs(line, ticket_ignore)
             if keys:
                 refs.add(number)
-                ref_chars += sum(len(k) for k in keys)
+                ref_chars[number] = sum(len(k) for k in keys)
             if is_history_note(line):
                 history.add(number)
     return refs, history, covered, ref_chars
@@ -730,7 +738,7 @@ def classify_file(text, ext, chars_per_token=4, ticket_ignore=frozenset()):
     refs, history, covered, ref_chars = _line_classes(found, text, ticket_ignore)
     buckets = {"commented_out": [], "trivial_doc": [], "short_inline": [],
                "ticket_ref": sorted(refs), "history_note": sorted(history)}
-    zero, noise_chars, immune = [], ref_chars, 0
+    zero, noise_chars, immune = [], 0, 0
 
     for item in found:
         # Directives (eradicate's whitelist) gate every detector, including
@@ -785,6 +793,9 @@ def classify_file(text, ext, chars_per_token=4, ticket_ignore=frozenset()):
         if klass in COUNTED_CLASSES:
             noise_chars += len(item.text)
 
+    # A key on a line a detector already counted is inside that line's text.
+    detected = set(buckets["commented_out"]) | set(buckets["trivial_doc"])
+    noise_chars += sum(c for n, c in ref_chars.items() if n not in detected)
     evidence = {"tokens": -(-noise_chars // chars_per_token), "immune": immune,
                 "zero_coherence": zero, "density": _density(covered, text)}
     for klass, lines in buckets.items():

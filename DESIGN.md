@@ -446,13 +446,17 @@ reason it stands for belongs in the comment or in the commit message. The key no
 counts when, outside any URL, it carries `[A-Z][A-Z0-9]+-\d+` or `#\d+` after an issue word
 (`issue`, `PR`, `pull`, `bug`, `fixes`, `closes`, `resolves`, `see`, `задача`, `тикет`). A bare
 `#333` is a colour and `#2` a list item, so it needs the word. Not counted: a line with a task tag
-(`TODO(ABC-12)` names work not yet in the code, the one place a key belongs); a prefix in
-`NOT_A_TRACKER` (`UTF`, `ISO`, `SHA`, `RFC`, `PEP`, `CVE`, `Q1`…`Q4` and other public identifiers);
-a prefix in config `ticket_ref_ignore`; a key preceded by `-` or `[`, which is a regex character
-class (`[A-Z0-9]` read as `Z0-9` in a minified vendored file). The unit is the physical line, read
+(`TODO(ABC-12)` names work not yet in the code, the one place a key belongs; the tag is matched in
+capitals only, so "the todo list" in prose excuses nothing); a prefix in `NOT_A_TRACKER` (`UTF`,
+`ISO`, `SHA`, `RFC`, `PEP`, `CVE`, `Q1`…`Q4` and other public identifiers, plus the C-style bounds
+`SIZE-1`, `MAX-1`); a prefix in config `ticket_ref_ignore`, compared case-sensitively; a key
+preceded by `-`, which is a regex character class (`[A-Z0-9]` read as `Z0-9` in a minified vendored
+file). A key in brackets, `[ABC-1]`, counts. Source lines are split on `\n` only, as the tokenizer
+counts them, so a form feed cannot shift a key from code onto a comment line. The unit is the physical line, read
 back from the source for an own-line comment or docstring, so one key in a twenty-line docstring is
-one noise line, not twenty, and a key in a string literal beside an inline comment is not a
-comment. It runs past the 30-word rule and reason words on purpose: a long, reasoned comment with a
+one noise line, not twenty, and a key in a string literal beside a one-line inline comment is not
+a comment. A block comment that shares a line with code is read back from the source whole, so a
+key in that code counts — a rare shape, accepted rather than parsed further. It runs past the 30-word rule and reason words on purpose: a long, reasoned comment with a
 key in it still carries the key. Live precision: 102 of 104 sampled lines across three
 repositories, the 2 false being the character-class shape now refused (`references/metrics.md`).
 
@@ -1068,7 +1072,11 @@ read from `config.thresholds` — `comment_noise` has no threshold either — so
 none and an old file may keep the keys it had but not add one. A baseline written before this
 check existed has no `ticket_refs` for the file; that grants nothing and forbids nothing until
 `update-baseline` records it, so upgrading the vendored guard never fails a commit on untouched
-keys. `null` (a language with no comment reader, Python that does not parse) is never checked.
+keys. `null` (a language with no comment reader, Python that does not parse) is never checked,
+on either side: a baseline that recorded `null` grants and forbids nothing, like a missing key. A
+renamed file is a new path and faces `warn` 1, so moving a file that carries a key fails until the
+key is rewritten or the baseline is updated — the same rule as for size, felt more often here
+because the fixed `warn` is low.
 `guard.py` cannot import `code_health`, so the comment reader and detector are copied into it and
 pinned to the originals by `tests/test_parser_agreement.py`.
 

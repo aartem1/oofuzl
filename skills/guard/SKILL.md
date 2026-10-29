@@ -57,8 +57,11 @@ unpredictable. Reordering two same-named functions reads the same way.
 fixed at `1` in the script rather than read from config: a new file may carry no comment line with
 a bare key such as `ABC-123`, and an old file may keep the ones it had but not add one. The count is
 the audit's `ticket_ref` class — keys in a URL or on a `TODO` line, standards like `UTF-8`, and
-prefixes in config `ticket_ref_ignore` do not count. A baseline written before this check has no
-`ticket_refs` for its files and is not checked on them until the next `update-baseline`.
+prefixes in config `ticket_ref_ignore` (case-sensitive) do not count. A baseline written before
+this check has no `ticket_refs` for its files and is not checked on them until the next
+`update-baseline`. A renamed or moved file is a new path: if it carries a key, the commit fails.
+Rewrite the key into the reason it stood for, or run `update-baseline` when the move is the whole
+change.
 
 ## 2. Which thresholds apply
 

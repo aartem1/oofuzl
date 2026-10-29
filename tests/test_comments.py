@@ -1083,6 +1083,31 @@ class TicketRefTests(unittest.TestCase):
     def test_a_key_in_code_is_not_a_comment(self):
         self.assertEqual(self._lines('KEY = "ABC-123"  # the probe key\n'), [])
 
+    def test_a_form_feed_does_not_shift_the_source_lines(self):
+        src = 'x = 1\n\x0c\ny = f("XYZ-9")\n# plain note\n'
+        self.assertEqual(self._lines(src), [])
+
+    def test_a_continued_string_does_not_shift_the_source_lines(self):
+        src = 'var s = "a\\\nb"; call("XYZ-9");\n// plain note here\n'
+        self.assertEqual(self._lines(src, ".js"), [])
+
+    def test_a_key_in_brackets_is_counted(self):
+        self.assertEqual(CM.ticket_refs("[HH-123] keep the order"), ["HH-123"])
+
+    def test_lowercase_todo_in_prose_does_not_excuse_a_key(self):
+        self.assertEqual(CM.ticket_refs("the todo list says ABC-1"), ["ABC-1"])
+        self.assertEqual(CM.ticket_refs("TODO(ABC-1): drop the flag"), [])
+
+    def test_bounds_and_architectures_are_not_keys(self):
+        for text in ("loop to SIZE-1", "up to MAX-1 rows", "built for X86-64"):
+            with self.subTest(text=text):
+                self.assertEqual(CM.ticket_refs(text), [])
+
+    def test_a_key_on_a_detected_line_is_not_priced_twice(self):
+        got = CM.classify_file("# return ABC-1\nx = 1\n", ".py")
+        self.assertEqual(got["evidence"]["commented_out"]["lines"], [1])
+        self.assertEqual(got["evidence"]["tokens"], 3)
+
     def test_a_key_inside_a_link_is_not_counted(self):
         self.assertEqual(
             self._lines("x = 1  # https://jira.example.com/browse/ABC-1\n"), [])

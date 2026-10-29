@@ -263,6 +263,19 @@ class TicketRefRatchetTests(RatchetTests):
         self.put("a.py", "# ABC-1 one\n# ABC-2 two\nx = 1\n")
         self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
 
+    def test_a_baseline_that_could_not_parse_the_file_does_not_check_it(self):
+        self.baseline({"a.py": {"lines": 3, "tokens": 30, "ticket_refs": None,
+                                "functions": {}}})
+        self.put("a.py", "# ABC-1 one\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
+
+    def test_a_malformed_ignore_setting_is_ignored_not_split_into_letters(self):
+        self.baseline({})
+        (self.root / ".code-health" / "config.json").write_text(
+            json.dumps({"ticket_ref_ignore": "TIER"}))
+        self.put("a.py", "# read off the TIER-2 unit\nx = 1\n")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 1)
+
     def test_a_brace_file_is_checked_too(self):
         self.baseline({})
         self.put("a.ts", "/*\n * Totals per team (WEB-12).\n */\nlet x = 1;\n")

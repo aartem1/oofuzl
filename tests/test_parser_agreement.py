@@ -307,9 +307,6 @@ class NestingAgreementTests(unittest.TestCase):
         self.assertEqual(list(theirs.values()), [mine[0]["nesting"]])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # Every shape the two comment readers must agree on: own-line, inline and
 # merged `#` comments, docstrings, a key in code, in a link and under a TODO,
@@ -328,6 +325,8 @@ TICKET_REF_SOURCES = [
              'const re = /[A-Z0-9]+/; // keys look like [A-Z0-9]+-1\n'
              '/* unterminated WEB-5'),
     ("a.py", "x = = 1  # ABC-1\n"),
+    ("a.py", 'x = 1\n\x0c\ny = f("XYZ-9")\n# plain ABC-3 note\n'),
+    ("a.js", 'var s = "a\\\nb"; call("XYZ-9");\n// plain ABC-4 note\n'),
     ("a.rb", "# ABC-1\n"),
 ]
 
@@ -359,3 +358,8 @@ class TicketRefAgreementTests(unittest.TestCase):
         self.assertEqual(set(CM.BRACE_EXT), set(guard.BRACE_EXT))
         for name in ("_TICKET_KEY_RE", "_ISSUE_NUMBER_RE", "_URL_RE", "_TASK_TAG_RE"):
             self.assertEqual(getattr(CM, name).pattern, getattr(guard, name).pattern)
+            self.assertEqual(getattr(CM, name).flags, getattr(guard, name).flags)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -162,17 +162,19 @@ def _python_nesting(source):
 # code_health/comments.py (`ticket_refs`, `extract_brace`, `_physical_lines`),
 # duplicated for the reason the nesting pass above is; the parser agreement
 # test checks the two count the same lines.
-_TICKET_KEY_RE = re.compile(r"(?<![-\[])\b([A-Z][A-Z0-9]+)-\d+\b")
+_TICKET_KEY_RE = re.compile(r"(?<!-)\b([A-Z][A-Z0-9]+)-\d+\b")
 _ISSUE_NUMBER_RE = re.compile(
     r"\b(?:issues?|pr|pull|bug|fix(?:es|ed)?|close[sd]?|resolve[sd]?|see"
     r"|задач[аеиуой]?|тикет[аеуом]?)\s*#\d+\b", re.IGNORECASE)
 _URL_RE = re.compile(r"https?://\S+")
-_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
+_TASK_TAG_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b")
 NOT_A_TRACKER = frozenset({
     "UTF", "UCS", "ISO", "IEC", "IEEE", "ANSI", "ECMA", "ES", "RFC", "PEP",
     "CVE", "CWE", "SHA", "MD", "AES", "RSA", "HMAC", "CRC", "KOI", "CP", "WIN",
     "WINDOWS", "LATIN", "ASCII", "BASE", "HTTP", "TLS", "SSL", "IPV", "HTML",
-    "CSS", "JSON", "PKCS", "X", "Q1", "Q2", "Q3", "Q4", "H", "COVID", "GPT",
+    "CSS", "JSON", "PKCS", "Q1", "Q2", "Q3", "Q4", "COVID", "GPT", "X86",
+    "SHA3", "MPEG", "RS", "DDR", "SIZE", "LEN", "LENGTH", "MAX", "MIN", "COUNT",
+    "IDX", "NUM",
 })
 BRACE_EXT = {
     ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".java",
@@ -254,6 +256,8 @@ def _skip_literal(text, i, line):
     while i < n:
         ch = text[i]
         if ch == "\\":
+            if text[i + 1:i + 2] == "\n":
+                line += 1
             i += 2
             continue
         if ch == "\n":
@@ -271,7 +275,7 @@ def _has_code_before(text, i):
 
 def count_ticket_refs(text, ext, ignore=frozenset()):
     """Comment lines carrying a tracker key, or None when no reader covers `ext`."""
-    src_lines = text.splitlines()
+    src_lines = text.split("\n")
     if ext == ".py":
         found = _python_comment_lines(text, src_lines)
     elif ext in BRACE_EXT:
@@ -390,7 +394,15 @@ def settings_for(repo_root):
     return (merged,
             _chars_per_token(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)),
             compile_excludes(cfg.get("exclude", [])),
-            frozenset(cfg.get("ticket_ref_ignore") or ()))
+            _ticket_ignore(cfg.get("ticket_ref_ignore")))
+
+
+def _ticket_ignore(value):
+    # The audit refuses a malformed list; the guard must not block a commit on
+    # it, so it ignores the setting rather than read "TIER" as four letters.
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return frozenset(value)
+    return frozenset()
 
 
 def _chars_per_token(value):
@@ -543,9 +555,10 @@ def compare(measured, baseline, thresholds):
     for path, current in sorted(measured.items()):
         base = base_files.get(path, {})
         base_funcs = base.get("functions", {})
-        if path in base_files and "ticket_refs" not in base:
-            # A baseline written before this metric existed grants nothing
-            # and forbids nothing for it until `update-baseline`.
+        if path in base_files and base.get("ticket_refs") is None:
+            # A baseline written before this metric existed, or on a Python
+            # that could not parse the file, grants nothing and forbids
+            # nothing for it until `update-baseline`.
             current = dict(current, ticket_refs=None)
         entities = [(None, current, base, _FILE_CHECKS)]
         entities.extend((name, func, base_funcs.get(name, {}), _FUNC_CHECKS)
