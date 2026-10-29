@@ -180,6 +180,28 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
    Stopping fixes all three, and it is what step 4 and the red-gate rule already do — the earlier
    "continue to the next item" was the odd one out.
 
+### The shape of change for a `comment_noise` group
+
+Each class has its own fix, and the brief in item 3 names it. Read the class from the finding's
+`evidence.<class>.lines`, never from a prefix scan of the file.
+
+- `commented_out` — delete the dead code; if it documents a decision, keep one line saying which.
+- `trivial_doc` — delete the restatement, or replace it with what the name does not say. A section
+  header in a types file is a judgement call (`<plugin-root>/references/quality-policy.md`).
+- `ticket_ref` — remove the key and keep the meaning. `# ABC-123: keep the old order for exports`
+  becomes `# keep the old order: exports are diffed line by line downstream` — the reason the key
+  stood for, stated. A line that was only the key (`// ABC-123`) goes entirely. Never move the key
+  into a URL, a `TODO`, or a `ticket_ref_ignore` entry to make it vanish: those are the class's
+  exemptions for a link, unfinished work and a domain term, and using them on a plain key is score
+  gaming (step 4, rule 3's spirit). When the reason is unknown and the key is the only lead, read the
+  task through the user's tracker if it is reachable; otherwise leave the line and record it in the
+  item's announcement rather than invent a reason.
+- `history_note` (evidence only, fix it once the file is open) — rewrite the story into a why-line
+  about the code as it is now. `# раньше считали по всем командам, теперь только по активным` becomes
+  `# только активные команды: архивные не попадают в отчёт`. What changed and when belongs in the
+  commit history; what still holds belongs in the comment. Delete the line only when nothing in it
+  holds any more.
+
 ## 4. Anti-gaming check
 
 Run against each group's diff, before its commit in step 3. Any hit ⇒ reject: edits stay
@@ -206,14 +228,16 @@ uncommitted, the item is marked `failed`, and the cycle stops (step 3, item 7).
    the groups where that pays best, which is why the rule covers them and not only the group that
    happens to carry line numbers.
 
-   **The protected set** is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines`, taken
-   from every `comment_noise` finding on the file being changed — including a `comment_noise`
+   **The protected set** is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines` ∪
+   `evidence.ticket_ref.lines`, taken from every `comment_noise` finding on the file being changed — including a `comment_noise`
    finding on a file whose group is `file_too_long`. Anything outside that union is a comment the
    detector judged worth keeping. If the file carries no `comment_noise` finding at all, the
    protected set is empty and **every** comment line the diff deletes is a hit.
-   `evidence.short_inline.lines` stays outside the protected set: that class is evidence-only,
-   never counted into `noise_comment_lines`, so deleting one of those lines is not gaming, though
-   it earns no credit either.
+   `evidence.short_inline.lines` and `evidence.history_note.lines` stay outside the protected set:
+   both classes are evidence-only, never counted into `noise_comment_lines`, so deleting one of
+   those lines is not gaming, though it earns no credit either. A `ticket_ref` or `history_note`
+   line that is **rewritten** — the old line deleted, a why-line added in its place — is an edit,
+   not a deletion: the replacement carries the meaning on.
 
    **Read `null` as "never ran", never as an empty list.** `evidence.commented_out` is `null` for
    every finding in a brace language — that class is Python-only. `null` contributes nothing to the

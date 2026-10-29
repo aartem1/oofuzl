@@ -274,7 +274,13 @@ back to the old budget, that just drops one of those silently.
    what to write when `not measured`.
 
    **The Comment noise row** reads `layers.comments.status` and never softens it:
-   - `measured` — total `noise_comment_lines` and how many files carry any.
+   - `measured` — read `layers.comments.totals`: `noise_comment_lines` and how many files carry
+     any; `ticket_ref` lines and `files_with_ticket_ref` on their own, because a bare tracker key is
+     the shape a reader recognises and the one `guard` ratchets; `history_note` lines as evidence
+     ("N comment lines tell history rather than meaning; not counted"); and comment density as
+     `comment_lines / lines` repo-wide, plus the two or three files with the highest
+     `evidence.density.ratio` when it exceeds 0.5. Density is context, never a verdict — say so
+     rather than call a well-commented file noisy.
    - `partial` — the same numbers, plus the layer's `reason` and `not_measured_files` verbatim.
      Two causes are common and mean different things: files whose extension has no comment reader
      (Ruby, PHP, Lua, Objective-C — `<plugin-root>/references/tools.md`), and a repository with no

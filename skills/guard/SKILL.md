@@ -53,6 +53,13 @@ A rename counts as a new entity and faces `warn`, not the old size — deliberat
 the moment not to carry the previous size forward, and fuzzy name matching would make the ratchet
 unpredictable. Reordering two same-named functions reads the same way.
 
+**Tracker keys in comments** (`ticket_refs`) are a file-level check under the same rule, with `warn`
+fixed at `1` in the script rather than read from config: a new file may carry no comment line with
+a bare key such as `ABC-123`, and an old file may keep the ones it had but not add one. The count is
+the audit's `ticket_ref` class — keys in a URL or on a `TODO` line, standards like `UTF-8`, and
+prefixes in config `ticket_ref_ignore` do not count. A baseline written before this check has no
+`ticket_refs` for its files and is not checked on them until the next `update-baseline`.
+
 ## 2. Which thresholds apply
 
 The **current** `.code-health/config.json` in the target repository, never the frozen copy stored

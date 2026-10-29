@@ -240,7 +240,9 @@ just is not the same problem.
                  "edit_fanout": [...] },
     "comments":{ "status": "partial",      "languages_measured": ["brace"],
                  "reason": "3 file(s) have no comment reader for their extension; commented_out is Python-only and this repository has no measured Python file",
-                 "not_measured_files": 3, "files": [...] }
+                 "not_measured_files": 3, "files": [...],
+                 "totals": { "noise_comment_lines": 41, "ticket_ref": 30, "files_with_ticket_ref": 12,
+                             "history_note": 9, "comment_lines": 820, "lines": 5400 } }
   },
   "findings": [
     { "id": "file_too_long:backend/reports.py",
@@ -408,16 +410,18 @@ reads. Shipping an unverified parser would restore the same claim one level down
 
 ### L2 — comments
 
-Own reader, no external tool: `scripts/code_health/comments.py`. Three detectors —
-`commented_out`, `trivial_doc`, `short_inline` — feed one metric, `noise_comment_lines`; only the
-first two are summed into it. Folding `short_inline` in as well would give the whole metric the
-precision of its weakest class, the same reason CCN and cognitive complexity are reported under
-separate names rather than blended into one number.
+Own reader, no external tool: `scripts/code_health/comments.py`. Five classes feed one metric,
+`noise_comment_lines`. Three are counted into it — `commented_out`, `trivial_doc`, `ticket_ref` —
+and two are evidence only — `short_inline`, `history_note`. Folding an evidence class in as well
+would give the whole metric the precision of its weakest class, the same reason CCN and cognitive
+complexity are reported under separate names rather than blended into one number. The value is the
+**union** of counted lines, not a sum: `ticket_ref` is a line-level class and can share a line with
+a `trivial_doc` verdict.
 
 **Two immunity passes, not one.** `is_directive` covers eradicate's own whitelist — tool directives
 (`noqa`, `type: ignore`, `eslint-disable`, `pylint`, `pyright`, `nosec`, `fmt:`, `isort:`,
 `NOSONAR`, `go:generate`, `ruff:`, `mypy:`), task tags (`TODO`/`FIXME`/`XXX`/`HACK`),
-licence/copyright text, issue references and URLs, shebang and coding declarations — and gates
+licence/copyright text, URLs, shebang and coding declarations — and gates
 every detector, `commented_out` included. `is_prose_immune` covers the 30-word rule, reason words
 (`because`/`workaround`/`otherwise` and their Russian equivalents), units and epoch/index
 conventions, range-bound wording, null-value wording, and ownership/lifetime verbs — and gates only
@@ -426,10 +430,50 @@ the two prose detectors (`trivial_doc`, `short_inline`). The split exists becaus
 code is code, not documentation of null semantics, and only the directive list may excuse it.
 `empty` and `closes` were dropped from the ownership/lifetime wording — both are ordinary verbs
 that appear in exactly the restating comments this metric targets ("empty the cache", "closes the
-file" over `f.close()`), not markers of genuine ownership documentation. Three of the directive
-alternatives — the issue-key pattern, `None`, `SPDX` — are matched case-sensitively inside an
-otherwise case-insensitive pass, because case-insensitively they matched `utf-8` and `python-3` as
-issue keys.
+file" over `f.close()`), not markers of genuine ownership documentation. `None` and `SPDX` are
+matched case-sensitively inside an otherwise case-insensitive pass.
+
+**Issue references left the directive list.** eradicate exempts `#123` and `ABC-123` because its
+job is to find code, and an issue reference is not code. Copied into this layer, the exemption made
+every comment carrying a key invisible to every detector — on jira-team-analytics that was 2,778
+comment lines in 951 of 1,673 source files, and the audit reported none of them. A bare key is
+noise on its own: it opens only for a reader with that tracker and the task's context, and the
+reason it stands for belongs in the comment or in the commit message. The key now feeds the
+`ticket_ref` class instead of excusing the comment. URLs stay directives — a link opens for anyone
+— and a key inside a URL is not counted.
+
+**`ticket_ref` (counted) is line-level and runs over every comment, whatever its immunity.** A line
+counts when, outside any URL, it carries `[A-Z][A-Z0-9]+-\d+` or `#\d+` after an issue word
+(`issue`, `PR`, `pull`, `bug`, `fixes`, `closes`, `resolves`, `see`, `задача`, `тикет`). A bare
+`#333` is a colour and `#2` a list item, so it needs the word. Not counted: a line with a task tag
+(`TODO(ABC-12)` names work not yet in the code, the one place a key belongs); a prefix in
+`NOT_A_TRACKER` (`UTF`, `ISO`, `SHA`, `RFC`, `PEP`, `CVE`, `Q1`…`Q4` and other public identifiers);
+a prefix in config `ticket_ref_ignore`; a key preceded by `-` or `[`, which is a regex character
+class (`[A-Z0-9]` read as `Z0-9` in a minified vendored file). The unit is the physical line, read
+back from the source for an own-line comment or docstring, so one key in a twenty-line docstring is
+one noise line, not twenty, and a key in a string literal beside an inline comment is not a
+comment. It runs past the 30-word rule and reason words on purpose: a long, reasoned comment with a
+key in it still carries the key. Live precision: 102 of 104 sampled lines across three
+repositories, the 2 false being the character-class shape now refused (`references/metrics.md`).
+
+**`history_note` (evidence only)** is a line telling what the code used to be: `раньше` where it
+means "previously", `теперь`, `как было`, `переехал`/`перенесли`/`перенесён`, `до правки|фикса|
+рефакторинга|миграции`, `старый код|логика|версия`; `previously`, `formerly`, `used to` (not
+`is used to`), `was moved|extracted|rewritten`, `moved out of|from`, `the old code`,
+`before|since the … fix|refactor|migration`. Left out on live evidence: `было`, `was`, `now`,
+`ранее`, `больше не`, `no longer` describe present behaviour more often than history, comparative
+`раньше` ("начался раньше", "раньше, чем") is a fact about time, and `after the migration` is
+nearly always a plan ("remove after migration"). Live precision 51 of 56; it still stays evidence,
+because a history line often carries the reason the code is shaped as it is — its fix is a rewrite
+into a why-line, and a count of lines a correct fix keeps would not fall when the debt is paid.
+
+**Density is evidence, not a metric.** `evidence.density` carries `comment_lines`, non-blank
+`lines` and their `ratio` per file, and `layers.comments.totals` sums them with the class counts.
+The original comment-noise design rejected density as a quality metric — no correlation with
+project size or team size over 5,229 projects (Arafati & Riehle, 2009), and comments cluster where
+code is complex — and that stands: it never becomes a finding, a threshold or a ratchet. It is in
+the report because a file with more comment lines than code is where a reader should look first
+for the classes above.
 
 **`commented_out` (Python only) is a majority rule, not "any line."** More than half of a
 comment's non-empty lines must read as code — the earlier any-line rule flagged a fifteen-line
@@ -602,12 +646,18 @@ that depends on churn is likewise `not_measured` — never a silent zero.
   "max_file_bytes": 4194304,
   "near_duplicate": { "min_similarity": 0.60, "min_tokens": 40 },
   "collision_min_files": 3,
-  "gate": null
+  "gate": null,
+  "ticket_ref_ignore": []
 }
 ```
 
 Absent file ⇒ built-in defaults; `audit` never writes it. `guard install` is the only command that
 may create it, and only with confirmation.
+
+`ticket_ref_ignore` lists key prefixes that are domain terms in this repository rather than
+tracker keys (`TIER` for `TIER-2`). `measure.py` and the vendored guard both read it; it is the one
+place a `ticket_ref` false positive is silenced, because a stoplist of standards built into the
+code can never be complete.
 
 `gate` is read by `fix` as **step 0** of gate detection (§9). A committed gate command is the
 repository's own answer and is used without asking.
@@ -888,8 +938,8 @@ Applied to each group's diff before its commit. Any hit ⇒ reject: edits stay u
 6. Comment lines deleted outside the protected set, for a `comment_noise`, `file_too_long` or
    `file_too_expensive` group. Deleting comments lowers `file_lines` and `file_tokens`, so rule 5
    reads the deletion as an improvement and confirms it; the two size groups are where that pays
-   best. The protected set is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines` from
-   every `comment_noise` finding on the file — `null` means the class never ran (`commented_out` is
+   best. The protected set is `evidence.commented_out.lines` ∪ `evidence.trivial_doc.lines` ∪
+   `evidence.ticket_ref.lines` from every `comment_noise` finding on the file — `null` means the class never ran (`commented_out` is
    Python-only) and grants nothing; the numbers are **old-side**, from the pre-fix measurement; and
    a deleted comment line is not decided by a `#`/`//` prefix, because the detector counts
    docstring lines and `/* */` interiors too. `skills/fix/SKILL.md` carries the operative text.
@@ -968,7 +1018,7 @@ With confirmation, in this order:
   "thresholds": { /* thresholds in force when frozen — informational, for drift reporting */ },
   "files": {
     "backend/reports.py": {
-      "lines": 1467, "tokens": 21300,
+      "lines": 1467, "tokens": 21300, "ticket_refs": 4,
       "functions": {
         "compute_summary_payload": { "lines": 211, "ccn": 18, "params": 19, "nesting": 3 },
         "handler":   { "lines": 201, "ccn": 12, "params": 3, "nesting": 2 },
@@ -1011,6 +1061,16 @@ copy exists so drift can be reported — lowering a threshold immediately tighte
 is the intended way to raise the bar; raising one is announced by `guard check` as a loosening.
 `check` prints the drift on every run, whether or not anything fails; the hook path prints it only
 alongside a failure, where it explains the ceiling, rather than on every commit.
+
+**Tracker keys in comments** are a third file-level check, `ticket_refs`: the number of comment
+lines carrying a `ticket_ref` (§5, "L2 — comments"). Its `warn` is fixed at `1` in `guard.py`, not
+read from `config.thresholds` — `comment_noise` has no threshold either — so a new file may carry
+none and an old file may keep the keys it had but not add one. A baseline written before this
+check existed has no `ticket_refs` for the file; that grants nothing and forbids nothing until
+`update-baseline` records it, so upgrading the vendored guard never fails a commit on untouched
+keys. `null` (a language with no comment reader, Python that does not parse) is never checked.
+`guard.py` cannot import `code_health`, so the comment reader and detector are copied into it and
+pinned to the originals by `tests/test_parser_agreement.py`.
 
 Failure prints, per violation: file, entity, metric, baseline/threshold, current value, and both
 escape hatches — `git commit --no-verify` and `/code-health:guard update-baseline`. Exit 1.
@@ -1205,7 +1265,8 @@ first. `SKILL.md` files are instructions and get skill validation.
 | Python `ast` pass | absolute, relative and `__init__` imports; a 3-node cycle; an unresolvable import counted; parameter-name tuples emitted |
 | churn | `-z` rename folded onto the new path; brace form never reached; binary `-`/`-` rows; deleted file dropped; author identity present; history shorter than the window; no `.git` → `not_measured` |
 | layer status | every tool absent → every layer `not_measured`, **exit 0**, valid JSON; `--layers derived` pulls in `size` and `churn` |
-| ratchet | existing file grows → fail; shrinks → pass; new file under `warn` → pass, over `warn` → fail; new function over `warn` in an old file → fail; renamed function treated as new; threshold lowered in config tightens immediately |
+| ratchet | existing file grows → fail; shrinks → pass; new file under `warn` → pass, over `warn` → fail; new function over `warn` in an old file → fail; renamed function treated as new; threshold lowered in config tightens immediately; a tracker key in a new file → fail, an old file adding one → fail, a baseline without `ticket_refs` → not checked |
+| comments | each class on its shapes and its known false positives; `ticket_ref` and `history_note` precision and recall over `tests/comment_history_sample.py`, labelled by meaning with known misses kept; guard and audit count the same `ticket_ref` lines |
 | guard performance | 20 changed files within the budget |
 | gate detection | `config.gate` wins over `make gate`; each of the five remaining sources; the ask fallback |
 | anti-gaming | each of the six rules triggers on a crafted diff, including a diff touching `.pre-commit-config.yaml`, and one deleting an unflagged docstring under a `file_too_long` group |

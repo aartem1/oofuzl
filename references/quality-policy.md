@@ -157,7 +157,10 @@ not inherited from Steidl or from any other source, and nothing outside this rep
 A detected comment class is summed into `noise_comment_lines` only when its precision clears 0.85;
 below that it is reported in `evidence` and never counted, because summing classes gives the whole
 metric the precision of its weakest member. `short_inline`, at ~0.70, is the class this rule keeps
-out. The floor is referred to wherever a counted class is justified, and always refers back to this
+out. `ticket_ref` clears it on live code (102 of 104 sampled lines) and is counted. `history_note`
+also cleared it in its sample (51 of 56) and is still kept out, for a different reason: a history
+line often carries the reason the code is shaped as it is, so its fix is a rewrite and a count of
+lines a correct fix keeps would not fall when the debt is paid. The floor is referred to wherever a counted class is justified, and always refers back to this
 paragraph.
 
 **Which precision figure to quote.** Three numbers exist and they are not interchangeable; the
@@ -177,6 +180,15 @@ to inspect, not proof. Two things the report states rather than leaving the read
   `export interface FiltersState` scores 1.00 and is the dominant live shape of `trivial_doc`. It
   satisfies the detector's definition, but it is navigation for a human reading a types file top to
   bottom. Say so when a group is mostly this shape.
+- **A tracker-key group is usually the largest and the cheapest.** In a repository whose comments
+  cite tasks it can span half the files (951 of 1,673 on jira-team-analytics). Say it as one
+  pattern — "2,778 comment lines carry a task key" — and recommend fixing it per directory, not as
+  one repository-wide sweep, so each commit stays reviewable. The fix keeps the meaning and drops
+  the key (`skills/fix/SKILL.md`, "The shape of change for a `comment_noise` group").
+- **History notes are evidence, never their own group.** Name the count in the group's `why` when
+  the same files carry one; a fix session rewrites them once the file is open.
+- **Density is context.** A file whose comment lines outnumber its code is worth a look, but density
+  is not a quality metric and never sets a priority.
 - **What the detector cannot see.** A comment that paraphrases the code in different words
   (`// loop through items` over `for item in items:`) shares no lexical overlap with it and needs a
   language model to catch; this layer does not run one.
