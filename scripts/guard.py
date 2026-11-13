@@ -205,6 +205,11 @@ BRACE_EXT = {
 }
 # A key in a new file fails; an old file may keep the keys it had.
 TICKET_REF_WARN = 1
+# The same rule for comments that switch a linter or type checker off.
+SUPPRESSION_WARN = 1
+_SUPPRESSION_RE = re.compile(
+    r"\bnoqa\b|\btype:\s*ignore\b|\bpylint:\s*disable|\bpyright:\s*ignore\b"
+    r"|eslint-disable|@ts-(?:ignore|expect-error|nocheck)\b")
 
 
 def ticket_refs(line, ignore=frozenset()):
@@ -307,6 +312,23 @@ def count_ticket_refs(text, ext, ignore=frozenset()):
     if found is None:
         return None
     return len({n for n, line in found if ticket_refs(line, ignore)})
+
+
+def count_suppressions(text, ext):
+    """Comment lines that switch a linter or type checker off, or None when
+    no reader covers `ext`. Only real comments count: a docstring or string
+    that mentions `noqa` silences nothing."""
+    if ext == ".py":
+        try:
+            toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
+        except (tokenize.TokenError, SyntaxError, ValueError):
+            return None
+        return len({t.start[0] for t in toks
+                    if t.type == tokenize.COMMENT and _SUPPRESSION_RE.search(t.string)})
+    if ext in BRACE_EXT:
+        found = _brace_comment_lines(text, text.split("\n"))
+        return len({n for n, line in found if _SUPPRESSION_RE.search(line)})
+    return None
 
 
 def parse_lizard_csv(text):
@@ -503,6 +525,7 @@ def _read_files(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset())
             "lines": len(text.splitlines()),
             "tokens": int(math.ceil(len(text) / float(chars_per_token))),
             "ticket_refs": count_ticket_refs(text, Path(rel).suffix, ticket_ignore),
+            "suppressions": count_suppressions(text, Path(rel).suffix),
             "functions": {},
         }
         if rel.endswith(".py"):
@@ -616,9 +639,10 @@ def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
 # commit for the first time.
 _FILE_CHECKS = (("file lines", "lines", "file_lines"),
                 ("estimated tokens", "tokens", "file_tokens"),
-                ("tracker keys in comments", "ticket_refs", "ticket_refs"))
+                ("tracker keys in comments", "ticket_refs", "ticket_refs"),
+                ("linter suppressions", "suppressions", "suppressions"))
 # Checks whose warn is fixed here, not read from `config.thresholds`.
-_FIXED_WARN = {"ticket_refs": TICKET_REF_WARN}
+_FIXED_WARN = {"ticket_refs": TICKET_REF_WARN, "suppressions": SUPPRESSION_WARN}
 _FUNC_CHECKS = (("function lines", "lines", "function_lines"),
                 ("cyclomatic complexity", "ccn", "function_ccn"),
                 ("parameters", "params", "parameters"),
@@ -646,11 +670,12 @@ def compare(measured, baseline, thresholds):
     legacy = (baseline.get("schema") or 1) < 2
     for path, current in sorted(measured.items()):
         base = base_files.get(path, {})
-        if path in base_files and base.get("ticket_refs") is None:
-            # A baseline written before this metric existed, or on a Python
-            # that could not parse the file, grants nothing and forbids
-            # nothing for it until `update-baseline`.
-            current = dict(current, ticket_refs=None)
+        for key in ("ticket_refs", "suppressions"):
+            if path in base_files and base.get(key) is None:
+                # A baseline written before this metric existed, or on a
+                # Python that could not parse the file, grants nothing and
+                # forbids nothing for it until `update-baseline`.
+                current = dict(current, **{key: None})
         base_funcs = _matched_baselines(current["functions"],
                                         base.get("functions", {}), legacy)
         entities = [(None, current, base, _FILE_CHECKS)]
@@ -772,7 +797,8 @@ def report_drift(moved):
 
 # Which numbers a baseline diff compares, per entity kind.
 _FILE_MOVES = (("file lines", "lines"), ("estimated tokens", "tokens"),
-               ("tracker keys in comments", "ticket_refs"))
+               ("tracker keys in comments", "ticket_refs"),
+               ("linter suppressions", "suppressions"))
 _FUNC_MOVES = (("function lines", "lines"), ("cyclomatic complexity", "ccn"),
                ("parameters", "params"), ("nesting depth", "nesting"))
 _MAX_LISTED_MOVES = 20

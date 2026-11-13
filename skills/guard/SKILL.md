@@ -70,6 +70,13 @@ this check has no `ticket_refs` for its files and is not checked on them until t
 Rewrite the key into the reason it stood for, or run `update-baseline` when the move is the whole
 change.
 
+**Linter suppressions** (`suppressions`) follow the same rule with `warn` fixed at `1`: comment lines
+with `noqa`, `type: ignore`, `pylint: disable`, `pyright: ignore`, `eslint-disable…`, `@ts-ignore`,
+`@ts-expect-error` or `@ts-nocheck`. A new file may carry none, an old file may keep the ones it
+had but not add one. Only real comments count, not a string or a docstring that mentions the word.
+Silencing a check is the cheapest way to make a task look finished; fix the code the check points
+at instead. A baseline written before this check is not checked on it until `update-baseline`.
+
 ## 2. Which thresholds apply
 
 The **current** `.code-health/config.json` in the target repository, never the frozen copy stored

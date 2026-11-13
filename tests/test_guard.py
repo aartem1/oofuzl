@@ -354,6 +354,49 @@ class TicketRefRatchetTests(RatchetTests):
                          [("tracker keys in comments", 0, 2)])
 
 
+class SuppressionRatchetTests(RatchetTests):
+    """Silencing a check is the cheapest way for an agent to finish a task:
+    `# noqa`, `# type: ignore`, `// eslint-disable-next-line` and
+    `// @ts-ignore` lines used to pass the hook unnoticed."""
+
+    def test_a_new_suppression_in_an_old_file_fails(self):
+        self.baseline({"a.py": {"lines": 3, "tokens": 20, "ticket_refs": 0,
+                                "suppressions": 1, "functions": {}}})
+        (self.root / "a.py").write_text(
+            "import os  # noqa: F401\nimport re  # noqa: F401\nx: int = 'a'  # type: ignore\n",
+            encoding="utf-8")
+        out = run_guard("a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("linter suppressions", out.stdout)
+
+    def test_keeping_the_old_suppressions_passes(self):
+        self.baseline({"a.ts": {"lines": 2, "tokens": 20, "ticket_refs": 0,
+                                "suppressions": 2, "functions": {}}})
+        (self.root / "a.ts").write_text(
+            "// @ts-ignore\nconst a = f(); // eslint-disable-line no-console\n",
+            encoding="utf-8")
+        self.assertEqual(run_guard("a.ts", cwd=self.root).returncode, 0)
+
+    def test_a_new_file_may_not_silence_a_check(self):
+        self.baseline({})
+        (self.root / "b.tsx").write_text(
+            "/* eslint-disable react/prop-types */\nexport const B = () => null;\n",
+            encoding="utf-8")
+        out = run_guard("b.tsx", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_the_words_in_a_string_or_docstring_are_not_a_suppression(self):
+        self.baseline({})
+        (self.root / "c.py").write_text(
+            '"""Never add # noqa here."""\nHINT = "# type: ignore"\n', encoding="utf-8")
+        self.assertEqual(run_guard("c.py", cwd=self.root).returncode, 0)
+
+    def test_a_baseline_without_the_metric_does_not_fail_old_files(self):
+        self.baseline({"a.py": {"lines": 1, "tokens": 20, "functions": {}}})
+        (self.root / "a.py").write_text("import os  # noqa\n", encoding="utf-8")
+        self.assertEqual(run_guard("a.py", cwd=self.root).returncode, 0)
+
+
 class BaselineTests(RatchetTests):
     def test_baseline_write_covers_files_and_functions(self):
         (self.root / "a.py").write_text("def f(a):\n    return a\n", encoding="utf-8")
