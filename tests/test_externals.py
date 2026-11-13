@@ -87,6 +87,22 @@ class GracefulAbsenceTests(unittest.TestCase):
         self.assertIn("vulture", out["reason"])
 
 
+    def test_a_real_vulture_reports_the_dead_code_it_finds(self):
+        # vulture 2.x exits 3 when it finds dead code. Only 0 and 1 were
+        # accepted, so a repository with dead code came back "not measured"
+        # and `dead_symbol` was never emitted.
+        root = Path(tempfile.mkdtemp())
+        (root / "m.py").write_text("import os\n\n\ndef used():\n    return 1\n\n\nused()\n",
+                                   encoding="utf-8")
+        cfg = C.load_config(root)
+        inv = D.enumerate_files(root, cfg)
+        state = EX.probe("vulture")
+        if not state["available"]:
+            self.skipTest("vulture not installed")
+        out = EX.run_dead(root, inv, {"vulture": state, "knip": self.ABSENT})
+        self.assertEqual(out["status"], "measured", out.get("reason"))
+        self.assertEqual([row["name"] for row in out["symbols"]], ["os"])
+
 class NpxProvisioningTests(unittest.TestCase):
     """`npx -y <pkg>` populates npx's own cache, which `npx --no-install` never
     consults: the tool that was just installed successfully was then reported

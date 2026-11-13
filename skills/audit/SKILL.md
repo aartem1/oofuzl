@@ -70,7 +70,7 @@ python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <
 - Read the document's `tools` block and report it as **one line**: every tool with
   `available: true, installed_by_us: true` goes under "Installed for this audit"; every tool with
   `available: true, installed_by_us: false` goes under "Already present". For example:
-  `Installed for this audit: jscpd@5.1.2, madge@8.0.0. Already present: lizard 1.23.0, vulture 2.7.`
+  `Installed for this audit: jscpd@5.4.1, madge@8.0.0. Already present: lizard 1.23.0, vulture 2.16.`
   A tool that stayed `available: false` is not part of this line — its absence is carried instead
   by that layer's own `status`/`reason` (step 3, step 10).
 - Keep the parsed `layers` and `findings` from this document; they feed grouping (step 7) and the

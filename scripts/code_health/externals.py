@@ -18,6 +18,10 @@ import tempfile
 from pathlib import Path
 
 LIZARD_VERSION = "1.23.0"
+# Pinned like lizard: an unpinned tool changes its exit codes or output under
+# the plugin. vulture 2.x moved "dead code found" from exit 1 to exit 3, and
+# the dead-code layer silently stopped reporting anything.
+VULTURE_VERSION = "2.16"
 
 # Chunked so a large repository does not exceed the OS argv limit; same
 # size and same reason as sizes.py.
@@ -32,13 +36,13 @@ TOOLS = {
         "probe": ["lizard", "--version"],
     },
     "vulture": {
-        "kind": "python", "package": "vulture", "probe": ["vulture", "--version"],
+        "kind": "python", "package": "vulture==%s" % VULTURE_VERSION, "probe": ["vulture", "--version"],
     },
     "pre-commit": {
         "kind": "python", "package": "pre-commit", "probe": ["pre-commit", "--version"],
     },
-    "jscpd": {"kind": "npx", "package": "jscpd@5", "probe": ["--version"]},
-    "madge": {"kind": "npx", "package": "madge@8", "probe": ["--version"]},
+    "jscpd": {"kind": "npx", "package": "jscpd@5.4.1", "probe": ["--version"]},
+    "madge": {"kind": "npx", "package": "madge@8.0.0", "probe": ["--version"]},
     "knip": {"kind": "npx", "package": "knip@6", "probe": ["--version"]},
 }
 
@@ -227,16 +231,14 @@ def run_dead(repo_root, inventory, tool_states):
     if py and vulture.get("available"):
         proc = _run([vulture.get("bin", "vulture"), "--min-confidence", "80"] + py,
                     cwd=str(repo_root), timeout=600)
-        # vulture exits 1 for BOTH "found dead code" and "error", so the return
-        # code alone cannot tell them apart -- stderr is the discriminator.
-        # Verified: clean -> rc 0, empty stderr; dead code found -> rc 1, empty
-        # stderr; syntax error or missing file -> rc 1 WITH stderr.
-        # Without this, a failing tool reports `measured` with zero symbols,
-        # which is indistinguishable from "ran clean, found nothing" -- the one
-        # thing every other layer in this design refuses to do.
+        # vulture 2.16: 0 -- clean, 3 -- dead code found, 1 -- a file could
+        # not be parsed and nothing else was found, 2 -- bad arguments. A
+        # file that cannot be parsed is named on stderr whatever the exit
+        # code, so stderr marks the result partial. Verified with the real
+        # tool; tests/test_externals.py runs it.
         if proc is None:
             reasons.append("vulture did not run")
-        elif proc.returncode not in (0, 1):
+        elif proc.returncode not in (0, 1, 3):
             reasons.append("vulture failed (exit %d): %s"
                            % (proc.returncode, (proc.stderr or "").strip()[:200]))
         else:

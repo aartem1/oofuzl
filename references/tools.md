@@ -207,15 +207,16 @@ and a second tool would only be justified by a query madge cannot express.
 
 ## `vulture` exit codes
 
-`vulture` exits `1` for **both** "dead code was found" **and** "an error occurred" (a syntax error
-in one of the scanned files, a missing path). The return code alone cannot discriminate between
-those two cases — **stderr is what separates them**. Verified behavior: a clean repository with no
-dead code exits `0` with empty stderr; a repository with real dead code exits `1` with empty
-stderr; a repository vulture could not fully analyze (a syntax error, a missing file) also exits `1`
-but with non-empty stderr. A naive `returncode != 0` check marks *every* repository that contains
-any dead code at all as `not_measured` — the common case, not the rare one. The correct check
-accepts `returncode in (0, 1)` as a successful run and inspects stderr separately to decide whether
-the run was clean, partial (some files could not be analyzed), or a genuine failure.
+Pinned at `vulture==2.16`. Verified exit codes of that version: `0` — clean; `3` — dead code found;
+`1` — a file could not be parsed and nothing else was found; `2` — bad arguments. A file that cannot
+be parsed is named on stderr whatever the exit code, so a run with stderr is `partial`. Older
+versions exited `1` for dead code; the plugin used to accept only `0` and `1`, so with 2.16 every
+repository that had dead code came back `not_measured` and `dead_symbol` was never emitted.
+`tests/test_externals.py` runs the real tool.
+
+`--min-confidence 80` drops unused functions and classes, which vulture rates at 60%; what remains
+is mostly unused imports and variables. Lowering it brings in many false positives on framework
+handlers.
 
 ## MinHash / LSH — the near-duplicate pass
 
@@ -256,8 +257,8 @@ through the structural index.
 JS/TS dead code is **not measured**, and the `dead` layer says so in its `reason`. `knip` used to be
 invoked with `--reporter json` and its stdout thrown away: the layer appended `javascript` to
 `languages_measured` on the return code alone. That is a confident "no dead code in JS/TS" produced
-by parsing nothing — the same failure already corrected for `vulture`, where an exit code of 1 means
-both "found dead code" and "error" and only stderr separates them.
+by parsing nothing — the same failure already corrected for `vulture`, whose exit codes say
+nothing about which files it could not parse; stderr does.
 
 There is no verified parser here for knip's JSON reporter, so the honest report is `not_measured`
 with the reason naming exactly that, and knip is not invoked at all rather than paying a
