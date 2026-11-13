@@ -103,6 +103,31 @@ class GracefulAbsenceTests(unittest.TestCase):
         self.assertEqual(out["status"], "measured", out.get("reason"))
         self.assertEqual([row["name"] for row in out["symbols"]], ["os"])
 
+    def test_a_real_jscpd_reports_code_clones_only(self):
+        # jscpd ran on the whole repository with no filter: JSON, YAML and
+        # Markdown clones filled the report, `--files` did not narrow it, and
+        # every run left a `code-health-jscpd-*` folder in the temp dir.
+        root = Path(tempfile.mkdtemp())
+        body = "".join('def f%d(a, b):\n    x = a + b * %d\n    y = x - a / 3\n'
+                       '    return [x, y, a, b, "%d"]\n\n' % (i, i, i) for i in range(12))
+        for name in ("a.py", "b.py", "c.py"):
+            (root / name).write_text(body, encoding="utf-8")
+        data = "".join('  "k%d": {"v": %d, "name": "item %d", "tags": ["a", "b"]},\n'
+                       % (i, i, i) for i in range(40))
+        for name in ("x.json", "y.json"):
+            (root / name).write_text("{\n" + data + '  "end": 1\n}\n', encoding="utf-8")
+        cfg = C.load_config(root)
+        state = EX.probe("jscpd")
+        if not state["available"]:
+            self.skipTest("jscpd not installed")
+        before = set(Path(tempfile.gettempdir()).glob("code-health-jscpd-*"))
+        out = EX.run_jscpd(root, cfg, state, ["a.py"], code={"a.py", "b.py", "c.py"})
+        self.assertEqual(out["status"], "measured", out.get("reason"))
+        pairs = sorted(sorted([c["firstFile"]["name"], c["secondFile"]["name"]])
+                       for c in out["clones"])
+        self.assertEqual(pairs, [["a.py", "b.py"], ["a.py", "c.py"]])
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("code-health-jscpd-*")), before)
+
 class NpxProvisioningTests(unittest.TestCase):
     """`npx -y <pkg>` populates npx's own cache, which `npx --no-install` never
     consults: the tool that was just installed successfully was then reported

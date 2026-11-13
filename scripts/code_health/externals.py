@@ -159,26 +159,47 @@ def survey(names, install_missing=False):
     return block
 
 
-def run_jscpd(repo_root, cfg, tool_state):
+def run_jscpd(repo_root, cfg, tool_state, measured=None, code=None):
+    """Exact clones between source files, at least one of them in `measured`.
+
+    jscpd scans the whole repository; its report is narrowed here. Without
+    that, JSON, YAML and Markdown clones made up most of the findings, and
+    `measure.py --files` did not narrow the result at all. `code` is every
+    source file of the repository (defaults to `measured`); `None` for
+    `measured` keeps the unfiltered report, for callers that pass nothing.
+    """
     if not tool_state.get("available"):
         return {"status": "not_measured",
                 "reason": "jscpd unavailable: %s" % tool_state.get("reason"),
                 "clones": []}
     out_dir = tempfile.mkdtemp(prefix="code-health-jscpd-")
-    proc = _run(_npx_argv("jscpd", tool_state) +
-                ["--min-tokens", str(cfg["near_duplicate"]["min_tokens"]),
-                 "--reporters", "json", "--output", out_dir, "--silent",
-                 str(repo_root)], timeout=900)
-    report = Path(out_dir) / "jscpd-report.json"
-    if proc is None or not report.exists():
-        return {"status": "not_measured", "reason": "jscpd produced no report",
-                "clones": []}
     try:
-        data = json.loads(report.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        return {"status": "not_measured", "reason": "jscpd report unreadable: %s" % exc,
-                "clones": []}
-    return {"status": "measured", "clones": data.get("duplicates", [])}
+        proc = _run(_npx_argv("jscpd", tool_state) +
+                    ["--min-tokens", str(cfg["near_duplicate"]["min_tokens"]),
+                     "--reporters", "json", "--output", out_dir, "--silent",
+                     str(repo_root)], timeout=900)
+        report = Path(out_dir) / "jscpd-report.json"
+        if proc is None or not report.exists():
+            return {"status": "not_measured", "reason": "jscpd produced no report",
+                    "clones": []}
+        try:
+            data = json.loads(report.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            return {"status": "not_measured",
+                    "reason": "jscpd report unreadable: %s" % exc, "clones": []}
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    clones = data.get("duplicates", [])
+    if measured is not None:
+        measured = set(measured)
+        code = set(code) if code is not None else measured
+        clones = [c for c in clones if _clone_in(c, measured, code)]
+    return {"status": "measured", "clones": clones}
+
+
+def _clone_in(clone, measured, code):
+    names = [(clone.get(side) or {}).get("name") for side in ("firstFile", "secondFile")]
+    return all(n in code for n in names) and any(n in measured for n in names)
 
 
 def run_madge(repo_root, relpaths, tool_state):

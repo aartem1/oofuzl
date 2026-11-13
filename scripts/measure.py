@@ -77,7 +77,11 @@ def build_document(args):
         layers["churn"] = CH.measure_churn(repo_root, cfg, present)
     if "dup" in wanted:
         near = DUP.find_near_duplicates(repo_root, layers["size"].get("functions", []), cfg)
-        exact = EX.run_jscpd(repo_root, cfg, tools["jscpd"])
+        # The other side of a clone may lie outside `--files`, so the whole
+        # repository's source list says what counts as code.
+        code = inventory.source if args.files is None else \
+            D.enumerate_files(repo_root, cfg).source
+        exact = EX.run_jscpd(repo_root, cfg, tools["jscpd"], inventory.source, code)
         layers["dup"] = DUP.assemble(layers["size"], near, exact)
         all_findings.extend(F.duplicate_findings(layers["dup"]["near"], cfg))
         all_findings.extend(F.clone_findings(layers["dup"]["exact"], cfg))
