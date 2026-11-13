@@ -549,6 +549,11 @@ def _lizard_rows(repo_root, argv, relpaths):
         proc = subprocess.run(
             argv + ["-ENS", "--csv"] + list(relpaths[start:start + _ARG_CHUNK]),
             cwd=str(repo_root), capture_output=True, text=True)
+        if proc.returncode != 0:
+            sys.stderr.write("code-health guard: lizard failed (exit %d), functions in %d "
+                             "file(s) not checked: %s\n"
+                             % (proc.returncode, len(relpaths[start:start + _ARG_CHUNK]),
+                                (proc.stderr or "").strip()[:200]))
         rows.extend(parse_lizard_csv(proc.stdout))
     return rows
 

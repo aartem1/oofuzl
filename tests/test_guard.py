@@ -354,6 +354,21 @@ class TicketRefRatchetTests(RatchetTests):
                          [("tracker keys in comments", 0, 2)])
 
 
+class LizardFailureTests(unittest.TestCase):
+    def test_a_failing_lizard_is_reported_not_passed_silently(self):
+        # A lizard that exited with an error left every function unchecked
+        # and the commit passed without a word.
+        import os
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / ".code-health").mkdir()
+        (self.root / ".code-health" / "baseline.json").write_text('{"files": {}}')
+        (self.root / "a.py").write_text("def f(a):\n    return a\n", encoding="utf-8")
+        env = dict(os.environ, CODE_HEALTH_LIZARD="/usr/bin/false")
+        out = subprocess.run([sys.executable, str(GUARD), "a.py"], cwd=self.root,
+                             capture_output=True, text=True, env=env)
+        self.assertIn("lizard failed", out.stdout + out.stderr)
+
+
 class SuppressionRatchetTests(RatchetTests):
     """Silencing a check is the cheapest way for an agent to finish a task:
     `# noqa`, `# type: ignore`, `// eslint-disable-next-line` and
