@@ -53,6 +53,9 @@ def parse_args(argv=None):
     parser.add_argument("--files", nargs="*")
     parser.add_argument("--install-missing", action="store_true")
     parser.add_argument("--out")
+    parser.add_argument("--brief", type=int, metavar="N",
+                        help="print totals by kind and the N worst findings of each kind; "
+                             "the full document still goes to --out")
     return parser.parse_args(argv)
 
 
@@ -115,6 +118,32 @@ def build_document(args):
     }
 
 
+def brief(doc, per_kind):
+    """Totals by kind and level plus the `per_kind` worst findings of each
+    kind: `hard` first, then the largest value. The full document stays the
+    source for the ledger; this is what a model reads first."""
+    counts, by_kind = {}, {}
+    for finding in doc["findings"]:
+        level = counts.setdefault(finding["kind"], {})
+        level[finding["level"]] = level.get(finding["level"], 0) + 1
+        by_kind.setdefault(finding["kind"], []).append(finding)
+    worst = {}
+    for kind, rows in sorted(by_kind.items()):
+        rows.sort(key=lambda f: (f["level"] != "hard", -_numeric(f.get("value")), f["id"]))
+        worst[kind] = rows[:per_kind]
+    return {
+        "schema": doc["schema"], "generated_at": doc["generated_at"], "repo": doc["repo"],
+        "tools": doc["tools"], "summary": doc["summary"],
+        "layers": {name: {"status": layer.get("status"), "reason": layer.get("reason")}
+                   for name, layer in doc["layers"].items()},
+        "counts": counts, "findings": worst,
+    }
+
+
+def _numeric(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
 def _merge_js_imports(imports_layer, js):
     """Fold madge's JS/TS result into the Python import layer."""
     if js["status"] != "measured":
@@ -152,7 +181,9 @@ def main(argv=None):
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
-    else:
+    if args.brief is not None:
+        sys.stdout.write(json.dumps(brief(doc, args.brief), indent=2, ensure_ascii=False) + "\n")
+    elif not args.out:
         sys.stdout.write(text + "\n")
     return 0
 

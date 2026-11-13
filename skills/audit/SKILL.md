@@ -60,8 +60,13 @@ output somewhere **outside the target repository** (a fresh `mktemp -d`, never a
 repo even if gitignored):
 
 ```bash
-python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <tmp>/measure.json
+python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <tmp>/measure.json \
+  --brief 10
 ```
+
+`--brief 10` prints a short document to stdout: tools, layer statuses, `summary`, `counts` (findings
+per kind and level) and the ten worst findings of each kind (`hard` first, then the largest value).
+Read that first; open `<tmp>/measure.json` for the rest of a kind only when grouping needs it.
 
 - **Exit code 0 means "produced a valid document"**, including when every optional tool is missing
   and every layer is `not_measured`. Findings never change the exit code. A non-zero exit is a

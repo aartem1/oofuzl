@@ -103,6 +103,23 @@ def run_measure(root, *extra):
     return json.loads(proc.stdout)
 
 
+class BriefTests(unittest.TestCase):
+    def test_brief_gives_totals_and_the_worst_findings_of_each_kind(self):
+        # A full report ran to 34.6 MB and 9640 findings on one repository,
+        # and the model grouped them with one-off commands every time.
+        root = Path(tempfile.mkdtemp())
+        for i, lines in enumerate((500, 1200, 900)):
+            (root / ("f%d.py" % i)).write_text("x = 1\n" * lines, encoding="utf-8")
+        out = Path(tempfile.mkdtemp()) / "full.json"
+        brief = run_measure(root, "--layers", "size", "--out", str(out), "--brief", "2")
+        full = json.loads(out.read_text())
+        self.assertEqual(len([f for f in full["findings"] if f["kind"] == "file_too_long"]), 3)
+        self.assertEqual(brief["counts"]["file_too_long"], {"hard": 2, "warn": 1})
+        self.assertEqual([f["value"] for f in brief["findings"]["file_too_long"]], [1200, 900])
+        self.assertEqual(brief["layers"]["size"]["status"], full["layers"]["size"]["status"])
+        self.assertNotIn("functions", brief["layers"]["size"])
+
+
 class LayerStatusContractTests(unittest.TestCase):
     """One assertion, three defects. Before the honest-degradation fixes this
     failed on `derived`, which reported `measured` with `hotspots: []`
