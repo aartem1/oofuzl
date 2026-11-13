@@ -354,6 +354,28 @@ class TicketRefRatchetTests(RatchetTests):
                          [("tracker keys in comments", 0, 2)])
 
 
+class FileOnlyLanguageTests(RatchetTests):
+    def test_a_large_new_vue_or_sql_file_fails_on_size(self):
+        # Logic moved into `.vue`, `.svelte`, `.sql` or `.sh` was never
+        # measured at all.
+        self.baseline({})
+        for name in ("big.vue", "big.sql"):
+            (self.root / name).write_text("<x/>\n" * 500, encoding="utf-8")
+            out = run_guard(name, cwd=self.root)
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("file lines", out.stdout)
+
+    def test_functions_in_a_vue_file_are_not_measured(self):
+        (self.root / "a.vue").write_text(
+            "<template><div/></template>\n<script>\nexport default { methods: "
+            "{ f(a) { if (a) { return 1 } return 2 } } }\n</script>\n", encoding="utf-8")
+        target = self.root / ".code-health" / "baseline.json"
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        files = json.loads(target.read_text())["files"]
+        self.assertEqual(files["a.vue"]["functions"], {})
+        self.assertEqual(files["a.vue"]["lines"], 4)
+
+
 class LizardFailureTests(unittest.TestCase):
     def test_a_failing_lizard_is_reported_not_passed_silently(self):
         # A lizard that exited with an error left every function unchecked

@@ -25,6 +25,7 @@ import subprocess
 import sys
 
 from . import config as _config
+from .discovery import FILE_ONLY_EXT
 from . import pyast as _pyast
 
 # The pinned lizard version lives in `externals.LIZARD_VERSION` alone --
@@ -252,7 +253,8 @@ def measure_sizes(repo_root, inventory, cfg, include_tests=False):
         return layer
 
     try:
-        text = run_lizard(repo_root, targets, argv_prefix)
+        text = run_lizard(repo_root, [t for t in targets
+                                      if os.path.splitext(t)[1] not in FILE_ONLY_EXT], argv_prefix)
         layer["functions"] = parse_lizard_csv(text)
         _apply_destructured_params(repo_root, layer["functions"])
         layer["nesting_source"] = _apply_nesting_source(repo_root, layer["functions"], targets)

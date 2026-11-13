@@ -44,7 +44,11 @@ SOURCE_EXT = frozenset({
     ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java",
     ".kt", ".rs", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp",
     ".cs", ".swift", ".scala", ".lua", ".m", ".mm",
-})
+}) | {".vue", ".svelte", ".sql", ".sh"}
+# Measured for file size only. lizard reads functions out of some of these
+# with wrong line numbers (a `.vue` script block is shifted), and a file
+# size is all the ratchet needs to stop logic piling up there.
+FILE_ONLY_EXT = frozenset({".vue", ".svelte", ".sql", ".sh"})
 
 
 def compile_pattern(pattern):

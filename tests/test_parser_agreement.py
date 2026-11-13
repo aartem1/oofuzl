@@ -58,6 +58,7 @@ class ParserAgreementTests(unittest.TestCase):
         from code_health import discovery as D
         guard = load_guard()
         self.assertEqual(set(D.SOURCE_EXT), set(guard.SUPPORTED_EXT))
+        self.assertEqual(set(D.FILE_ONLY_EXT), set(guard.FILE_ONLY_EXT))
 
     def test_both_name_python_functions_the_same_way(self):
         import inspect

@@ -57,7 +57,10 @@ SUPPORTED_EXT = {
     ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java",
     ".kt", ".rs", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp",
     ".cs", ".swift", ".scala", ".lua", ".m", ".mm",
+    ".vue", ".svelte", ".sql", ".sh",
 }
+# Measured for file size only, same as code_health/discovery.py.
+FILE_ONLY_EXT = frozenset({".vue", ".svelte", ".sql", ".sh"})
 
 FUNC_FIELDS = ("nloc", "ccn", "token", "param", "length", "location",
                "filename", "function_name", "long_name", "start_line",
@@ -619,7 +622,8 @@ def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
     argv = resolve_lizard()
     if argv is None or not files:
         return files, argv is not None
-    rows = _lizard_rows(repo_root, argv, list(files))
+    rows = _lizard_rows(repo_root, argv,
+                        [f for f in files if Path(f).suffix not in FILE_ONLY_EXT])
     # lizard does not emit rows in source order (a nested function precedes
     # its parent), and `function_key` numbers duplicates by appearance, so
     # the ordering has to be imposed here or the key would depend on

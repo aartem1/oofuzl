@@ -987,7 +987,7 @@ With confirmation, in this order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
    ```
 
    That block is an **entry** under a top-level `repos:` list, not a whole file. Append it to an
@@ -1004,6 +1004,8 @@ With confirmation, in this order:
    hook at all, so an extension the hook claims to check and pre-commit never delivers is checked
    by nobody. `lua` and `objective-c` were missing (`.lua`, `.m`), and both are real `identify`
    tags — verified against `identify.ALL_TAGS`. `.mm` arrives as `c++`, which is already listed.
+   `vue`, `svelte`, `sql` and `shell` carry `.vue`, `.svelte`, `.sql` and `.sh`, which are measured
+   for file size only: lizard reads functions out of a `.vue` script block with shifted line numbers.
 
    pre-commit builds the isolated environment itself, so the user's machine stays clean and CI
    behaves identically. Verified: `language: python` + `additional_dependencies` puts lizard's

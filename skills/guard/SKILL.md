@@ -109,7 +109,7 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
    ```
 
 
@@ -127,7 +127,7 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
    ```
 
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are deliberately omitted.
