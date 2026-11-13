@@ -53,6 +53,8 @@ def parse_args(argv=None):
     parser.add_argument("--files", nargs="*")
     parser.add_argument("--install-missing", action="store_true")
     parser.add_argument("--out")
+    parser.add_argument("--history", metavar="FILE",
+                        help="append one JSON line with this run's totals to FILE")
     parser.add_argument("--brief", type=int, metavar="N",
                         help="print totals by kind and the N worst findings of each kind; "
                              "the full document still goes to --out")
@@ -140,6 +142,19 @@ def brief(doc, per_kind):
     }
 
 
+def history_line(doc):
+    """One audit as one line: enough to answer "did it get better over a
+    year" without keeping every full report."""
+    summary = doc["summary"]
+    return {
+        "at": doc["generated_at"], "head": doc["repo"].get("head"),
+        "files": summary.get("files"), "loc": summary.get("loc"),
+        "tokens": summary.get("tokens_total"),
+        "layers": {name: layer.get("status") for name, layer in doc["layers"].items()},
+        "counts": brief(doc, 0)["counts"],
+    }
+
+
 def _numeric(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
 
@@ -181,6 +196,9 @@ def main(argv=None):
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
+    if args.history:
+        with open(args.history, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(history_line(doc), ensure_ascii=False, sort_keys=True) + "\n")
     if args.brief is not None:
         sys.stdout.write(json.dumps(brief(doc, args.brief), indent=2, ensure_ascii=False) + "\n")
     elif not args.out:

@@ -64,8 +64,12 @@ repo even if gitignored):
 
 ```bash
 python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <tmp>/measure.json \
-  --brief 10
+  --brief 10 --history "${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.history.jsonl"
 ```
+
+`--history` appends one line per audit (date, `HEAD`, size totals, layer statuses, findings per kind
+and level) next to the ledger. When the file already has earlier lines, say in one sentence how the
+counts moved since the previous audit.
 
 `--brief 10` prints a short document to stdout: tools, layer statuses, `summary`, `counts` (findings
 per kind and level) and the ten worst findings of each kind (`hard` first, then the largest value).

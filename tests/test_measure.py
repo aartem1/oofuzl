@@ -120,6 +120,21 @@ class BriefTests(unittest.TestCase):
         self.assertNotIn("functions", brief["layers"]["size"])
 
 
+class HistoryTests(unittest.TestCase):
+    def test_each_run_appends_one_line_that_answers_did_it_get_better(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "a.py").write_text("x = 1\n" * 900, encoding="utf-8")
+        history = Path(tempfile.mkdtemp()) / "history.jsonl"
+        run_measure(root, "--layers", "size", "--history", str(history))
+        (root / "a.py").write_text("x = 1\n" * 300, encoding="utf-8")
+        run_measure(root, "--layers", "size", "--history", str(history))
+        rows = [json.loads(line) for line in history.read_text().splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["counts"], {"file_too_long": {"hard": 1}})
+        self.assertEqual(rows[1]["counts"], {})
+        self.assertEqual([r["loc"] for r in rows], [900, 300])
+
+
 class LayerStatusContractTests(unittest.TestCase):
     """One assertion, three defects. Before the honest-degradation fixes this
     failed on `derived`, which reported `measured` with `hotspots: []`
