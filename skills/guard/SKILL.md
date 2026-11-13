@@ -100,7 +100,7 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c]
+                      swift, scala, lua, objective-c, json]
    ```
 
 
@@ -118,13 +118,14 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c]
+                      swift, scala, lua, objective-c, json]
    ```
 
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are deliberately omitted.
    `types_or` earns its place: it is what makes pre-commit skip the hook entirely when a commit
-   touches only docs or config, instead of paying process startup for `guard.py` to filter them out
-   itself. Do not trim the tag list: a type that is missing from it never reaches the hook, so an
+   touches only docs, instead of paying process startup for `guard.py` to filter them out itself.
+   `json` is in the list so that a commit changing only `.code-health/baseline.json` or
+   `config.json` still reaches the hook (section 8). Do not trim the tag list: a type that is missing from it never reaches the hook, so an
    extension `guard.py` claims to check would end up checked by nobody.
 3. **Vendor `<plugin-root>/scripts/guard.py` to `.code-health/guard.py`.** This copy is
    self-contained (standard library plus the `lizard` binary pre-commit provides) so a colleague
@@ -167,11 +168,11 @@ The same comparison as the hook, run by hand, installing nothing. `--check` cove
 `git diff --name-only HEAD` **plus** `git ls-files --others --exclude-standard`, because untracked
 files are exactly the new-entity case (rule 1) that `git diff` alone does not list.
 
-This is also where the two code paths diverge deliberately: the hook path makes **no git calls at
-all** — pre-commit already passes it the exact file list and stashes unstaged changes first, so
-`guard.py` reading straight from disk reads the staged content. `--check` needs git precisely
-because it also has to pick up untracked files, which the hook path never has to worry about since
-pre-commit only ever passes files it already tracks as part of the commit.
+This is also where the two code paths diverge deliberately: in the hook path pre-commit already
+passes the exact file list and stashes unstaged changes first, so `guard.py` reading straight from
+disk reads the staged content; its only git calls read the baseline and config at `HEAD`
+(section 8). `--check` also has to pick up untracked files, which the hook path never has to worry
+about since pre-commit only ever passes files it already tracks as part of the commit.
 
 ## 5. `update-baseline`
 
@@ -199,17 +200,41 @@ pinned in `additional_dependencies` (`lizard==1.23.0`). Writing the baseline wit
 lizard version and enforcing it with another produces false failures on code nobody touched, the
 first time a CCN or nesting calculation shifts upstream between versions.
 
-## 7. Why only a git hook
+## 7. Why a git hook, and the same check on the server
 
 `git commit` is run by the model itself, so a failed hook returns its error straight into the
 model's own context — the model is caught by the same channel a human is. The same hook, being an
-ordinary pre-commit hook rather than a Claude Code hook, works unchanged in Codex, in Cursor, and in
-CI. There is no Claude Code hook here by design.
+ordinary pre-commit hook rather than a Claude Code hook, works unchanged in Codex and in Cursor.
+There is no Claude Code hook here by design.
+
+A hook can always be skipped: `git commit --no-verify`, or a fresh clone where nobody ran
+`pre-commit install`. The place where a skipped hook shows up is a CI job on every pull request:
+
+```bash
+git fetch origin main
+git show origin/main:.code-health/guard.py | python - --base origin/main
+```
+
+`--base REF` checks every file changed since the merge base with `REF` and compares the branch's
+baseline and config with `REF`'s, so a branch that grew code past the ceiling, or moved the bar,
+fails there. The script is taken from `REF` too, so the branch cannot change the check that judges
+it. The CI checkout needs enough history for the merge base (for example `fetch-depth: 0`).
+When proposing this job, show it and let the user add it; `install` does not write CI files.
 
 ## 8. Never move the baseline to escape a failing commit
 
-The two escape hatches a failing hook prints are `git commit --no-verify`, for bypassing one commit,
-and `/code-health:guard update-baseline`, for moving the ratchet after a genuine improvement.
-Reaching for `update-baseline` to make a still-failing commit pass defeats the entire point of the
-ratchet: it would let exactly the growth the hook just caught become the new permanent floor. Use it
-only after the code has actually gotten smaller or simpler, never before.
+`/code-health:guard update-baseline` moves the ratchet after a genuine improvement. Reaching for it
+to make a still-failing commit pass defeats the entire point of the ratchet: it would let exactly
+the growth the hook just caught become the new permanent floor. Use it only after the code has
+actually gotten smaller or simpler, never before.
+
+The hook enforces this. It compares `.code-health/baseline.json` and `config.json` with their
+versions at `HEAD` (at `REF` with `--base`) and rejects the commit when they raise any ceiling:
+
+- a baseline value that grew to or past `warn`, or a new entity granted at or above `warn`;
+- a loosened threshold, a larger `chars_per_token`, a new `exclude` or `ticket_ref_ignore` entry;
+- a deleted baseline.
+
+A value that moved below `warn` changes no ceiling and passes; so does any improvement, and the
+install commit, which has no baseline at `HEAD`. Raising the bar on purpose is a person's decision:
+they commit it themselves, and the CI check above shows it in the pull request.

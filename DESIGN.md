@@ -987,7 +987,7 @@ With confirmation, in this order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c]
+                      swift, scala, lua, objective-c, json]
    ```
 
    That block is an **entry** under a top-level `repos:` list, not a whole file. Append it to an
@@ -997,7 +997,8 @@ With confirmation, in this order:
 
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are omitted. `types_or`
    is what earns its place: it makes pre-commit skip the hook entirely when a commit touches only
-   docs or config, instead of paying process startup for `guard.py` to filter them.
+   docs, instead of paying process startup for `guard.py` to filter them. `json` is listed so that
+   a change to the baseline or config alone still reaches the hook.
 
    **The tag list must cover `SUPPORTED_EXT`.** A file whose type is not listed never reaches the
    hook at all, so an extension the hook claims to check and pre-commit never delivers is checked
@@ -1080,12 +1081,19 @@ because the fixed `warn` is low.
 `guard.py` cannot import `code_health`, so the comment reader and detector are copied into it and
 pinned to the originals by `tests/test_parser_agreement.py`.
 
-Failure prints, per violation: file, entity, metric, baseline/threshold, current value, and both
-escape hatches — `git commit --no-verify` and `/code-health:guard update-baseline`. Exit 1.
+Failure prints, per violation: file, entity, metric, baseline/threshold, current value, and
+`/code-health:guard update-baseline` for moving the ratchet after a real improvement. Exit 1.
+The text does not suggest `git commit --no-verify`.
+
+Before the comparison the hook reads `baseline.json` and `config.json` at `HEAD` and rejects a
+commit that raises a ceiling through them: a baseline value grown to or past `warn`, a new entity
+granted at or above `warn`, a loosened threshold, a larger `chars_per_token`, a new `exclude` or
+`ticket_ref_ignore` entry, a deleted baseline. `--base REF` runs the same check for a CI job:
+files changed since the merge base with `REF`, judged against `REF`'s baseline and config.
 
 Performance budget: ≤2 s for 20 changed files. Measured on the calibration machine:
 `lizard -ENS --csv` over 20 files totalling 72,900 lines takes 0.57 s. `guard.py` in the hook path
-does one lizard subprocess, one JSON read, no network and **no git calls**.
+does one lizard subprocess, one JSON read, two `git show HEAD:` reads and no network.
 
 ### One measurement path, one lizard version
 
@@ -1314,7 +1322,7 @@ Three criteria that are not numbers:
 - The same audit completes on a token that lacks Administer Quality Profiles: `L1: partial`,
   `Sonar way` used, the permission named.
 - `/code-health:guard install` followed by an intentional 50-line growth of an already-oversized
-  file fails the commit, and the failure names the file, the baseline, and both escape hatches.
+  file fails the commit, and the failure names the file and the baseline.
 
 ## 18. Open points for the reviewer
 

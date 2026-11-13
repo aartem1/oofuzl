@@ -456,13 +456,17 @@ def excluded(relpath, compiled):
     return any(rx.match(relpath) for rx in compiled)
 
 
-def settings_for(repo_root):
-    cfg = load_json(Path(repo_root) / CONFIG_RELPATH, {})
+def merged_thresholds(cfg):
     merged = {k: dict(v) for k, v in DEFAULT_THRESHOLDS.items()}
     for name, override in (cfg.get("thresholds") or {}).items():
-        if name in merged:
+        if name in merged and isinstance(override, dict):
             merged[name].update(override)
-    return (merged,
+    return merged
+
+
+def settings_for(repo_root):
+    cfg = load_json(Path(repo_root) / CONFIG_RELPATH, {})
+    return (merged_thresholds(cfg),
             _chars_per_token(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)),
             compile_excludes([TOOL_DIR] + list(cfg.get("exclude", []))),
             _ticket_ignore(cfg.get("ticket_ref_ignore")))
@@ -727,8 +731,7 @@ def report(violations):
         print("  %-44s %-22s %s >= %s (%s)"
               % (where, v["metric"], v["value"], v["limit"], origin))
     print("\nOld debt is grandfathered; this is new growth.")
-    print("To move the ratchet deliberately:  /code-health:guard update-baseline")
-    print("To bypass this one commit:         git commit --no-verify")
+    print("To move the ratchet after a real improvement: /code-health:guard update-baseline")
 
 
 def threshold_drift(frozen, current):
@@ -832,6 +835,88 @@ def report_baseline_moves(previous, current, moves):
               "  improvement, never to get past a failing commit.")
 
 
+def loosening(ref_cfg, ref_base, cfg, base):
+    """How the working tree's config and baseline raise ceilings compared
+    with a reference commit's: one line per change, empty when none.
+
+    The ratchet trusted whatever `baseline.json` and `config.json` said, so
+    a commit that grew a file could raise its baseline in the same commit,
+    loosen a threshold, add an exclude or delete the baseline, and pass.
+    `None` for `ref_base` means the reference commit has no baseline yet:
+    the install commit, which has nothing to loosen.
+    """
+    if ref_base is None:
+        return []
+    if base is None:
+        return ["the baseline %s was deleted" % BASELINE_RELPATH]
+    ref_cfg = ref_cfg if isinstance(ref_cfg, dict) else {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    ref_thresholds = merged_thresholds(ref_cfg)
+    out = ["threshold %s.%s raised %s -> %s"
+           % (row["metric"], row["level"], row["from"], row["to"])
+           for row in threshold_drift(ref_thresholds, merged_thresholds(cfg))
+           if row["direction"] == "loosened"]
+    for key in ("exclude", "ticket_ref_ignore"):
+        added = sorted(set(_strings(cfg.get(key))) - set(_strings(ref_cfg.get(key))))
+        if added:
+            out.append("%s gained %s" % (key, ", ".join(added)))
+    was = ref_cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)
+    now = cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)
+    if _number(was) and _number(now) and now > was:
+        out.append("chars_per_token raised %s -> %s (fewer tokens counted)" % (was, now))
+    out.extend(_raised_ceilings(ref_base, base, ref_thresholds))
+    return out
+
+
+def _strings(value):
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _raised_ceilings(ref_base, base, thresholds):
+    """Every baseline value whose ceiling (`ceiling`) is higher than the
+    reference baseline grants. A value that moved below `warn` changes no
+    ceiling and is not listed."""
+    legacy = (ref_base.get("schema") or 1) < 2
+    old_files = ref_base.get("files") or {}
+    out = []
+    for path, current in sorted((base.get("files") or {}).items()):
+        old = old_files.get(path)
+        funcs = current.get("functions") or {}
+        matched = _matched_baselines(funcs, (old or {}).get("functions") or {}, legacy)
+        entities = [(None, _FILE_CHECKS, current, old or {})]
+        entities.extend((name, _FUNC_CHECKS, funcs[name], matched[name])
+                        for name in sorted(funcs))
+        for entity, checks, values, before in entities:
+            for label, key, tkey in checks:
+                value, was = values.get(key), before.get(key)
+                # A file whose old record lacks a metric predates it, the
+                # same rule `compare` applies.
+                if value is None or (entity is None and old is not None and was is None):
+                    continue
+                warn = _FIXED_WARN[tkey] if tkey in _FIXED_WARN else thresholds[tkey]["warn"]
+                if ceiling(value, warn) > ceiling(was, warn):
+                    where = "%s::%s" % (path, entity) if entity else path
+                    out.append("%-44s %-22s %s -> %s"
+                               % (where, label, "new" if was is None else was, value))
+    return out
+
+
+def report_loosening(ref, lines):
+    print("code-health guard: this change loosens the ratchet compared with %s\n" % ref)
+    for line in lines[:_MAX_LISTED_MOVES]:
+        print("  " + line)
+    if len(lines) > _MAX_LISTED_MOVES:
+        print("  ... and %d more" % (len(lines) - _MAX_LISTED_MOVES))
+    print("\nA ceiling raised next to the code it lets through is not an improvement.\n"
+          "Undo these changes to %s and %s and fix the code instead.\n"
+          "Moving the bar is a person's decision, not part of making a commit pass."
+          % (BASELINE_RELPATH, CONFIG_RELPATH))
+
+
 def write_baseline(repo_root, target, settings):
     thresholds, chars_per_token, exclude, ticket_ignore = settings
     files, had_lizard = measure(repo_root, _all_supported(repo_root, exclude),
@@ -862,6 +947,10 @@ def main(argv=None):
     parser.add_argument("--repo", default=".")
     parser.add_argument("--baseline")
     parser.add_argument("--check", action="store_true")
+    # For a CI job: check everything changed since REF against REF's
+    # baseline and config. A skipped hook (`--no-verify`, a clone without
+    # `pre-commit install`) surfaces here.
+    parser.add_argument("--base", metavar="REF")
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
@@ -871,7 +960,23 @@ def main(argv=None):
     if args.baseline:
         return write_baseline(repo_root, args.baseline, settings)
 
-    targets = _changed(repo_root) if args.check else list(args.files)
+    if args.base and not _is_commit(repo_root, args.base):
+        sys.stderr.write("code-health guard: %s is not a commit\n" % args.base)
+        return 2
+    ref = args.base or "HEAD"
+    baseline_path = repo_root / BASELINE_RELPATH
+    baseline = load_json(baseline_path, {"files": {}}) if baseline_path.exists() else None
+    loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH),
+                      _ref_json(repo_root, ref, BASELINE_RELPATH),
+                      load_json(repo_root / CONFIG_RELPATH, {}), baseline)
+    if loose:
+        report_loosening(ref, loose)
+        return 1
+
+    if args.base:
+        targets = _changed_since(repo_root, args.base)
+    else:
+        targets = _changed(repo_root) if args.check else list(args.files)
     targets = [t for t in targets
                if Path(t).suffix in SUPPORTED_EXT and not excluded(t, exclude)]
     # The hook path exits before touching disk when a commit carries nothing
@@ -879,13 +984,11 @@ def main(argv=None):
     if not targets and not args.check:
         return 0
 
-    baseline_path = repo_root / BASELINE_RELPATH
-    if not baseline_path.exists():
+    if baseline is None:
         print("code-health guard: no baseline at %s; nothing to ratchet against. "
               "Run /code-health:guard install." % BASELINE_RELPATH)
         return 0
 
-    baseline = load_json(baseline_path, {"files": {}})
     drift = threshold_drift(baseline.get("thresholds"), thresholds)
     if args.check:
         report_drift(drift)
@@ -932,6 +1035,38 @@ def _all_supported(repo_root, exclude):
                  for p in Path(repo_root).rglob("*") if p.is_file()]
     return [n for n in names
             if Path(n).suffix in SUPPORTED_EXT and not excluded(n, exclude)]
+
+
+def _is_commit(repo_root, ref):
+    return subprocess.run(["git", "-C", str(repo_root), "rev-parse", "--verify", "--quiet",
+                           ref + "^{commit}"], capture_output=True).returncode == 0
+
+
+def _git_show(repo_root, ref, relpath):
+    """`relpath` at commit `ref` as text, or `None` when it does not exist
+    there -- including a repository with no commits yet."""
+    out = subprocess.run(["git", "-C", str(repo_root), "show", "%s:%s" % (ref, relpath)],
+                         capture_output=True)
+    if out.returncode != 0:
+        return None
+    return out.stdout.decode("utf-8", "replace")
+
+
+def _ref_json(repo_root, ref, relpath):
+    text = _git_show(repo_root, ref, relpath)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {}
+
+
+def _changed_since(repo_root, ref):
+    out = subprocess.run(["git", "-C", str(repo_root), "diff", "--name-only",
+                          "--diff-filter=d", "%s...HEAD" % ref],
+                         capture_output=True, text=True)
+    return sorted(n for n in out.stdout.splitlines() if n) if out.returncode == 0 else []
 
 
 def _changed(repo_root):

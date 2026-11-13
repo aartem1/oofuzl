@@ -57,6 +57,7 @@ class RatchetTests(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("a.py", out.stdout)
         self.assertIn("900", out.stdout)
+        self.assertNotIn("--no-verify", out.stdout)
 
     def test_existing_small_file_may_grow_up_to_warn(self):
         # max(baseline 100, warn 400) == 400
@@ -79,13 +80,6 @@ class RatchetTests(unittest.TestCase):
         self.baseline({})
         self.write("new.py", 399)
         self.assertEqual(run_guard("new.py", cwd=self.root).returncode, 0)
-
-    def test_failure_names_both_escape_hatches(self):
-        self.baseline({})
-        self.write("new.py", 500)
-        out = run_guard("new.py", cwd=self.root)
-        self.assertIn("--no-verify", out.stdout)
-        self.assertIn("update-baseline", out.stdout)
 
     def test_unsupported_extensions_are_skipped_silently(self):
         self.baseline({})
@@ -382,6 +376,139 @@ class BaselineTests(RatchetTests):
         self.assertEqual(sorted(json.loads(target.read_text())["files"]), ["a.py"])
         out = run_guard(".code-health/guard.py", "a.py", cwd=self.root)
         self.assertEqual(out.returncode, 0, out.stdout)
+
+class LooseningTests(unittest.TestCase):
+    """An agent stuck on a failing commit could pass it without improving
+    anything: raise the baseline, loosen a threshold, add an exclude or
+    delete the baseline -- and nothing ever reported it."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.git("init", "-q", "-b", "main")
+        (self.root / ".code-health").mkdir()
+        self.write("a.py", 900)
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}}})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "start")
+
+    def git(self, *args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                        "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]
+                       + list(args), cwd=self.root, check=True, capture_output=True)
+
+    def write(self, rel, lines):
+        (self.root / rel).write_text("".join("x = %d\n" % i for i in range(lines)),
+                                     encoding="utf-8")
+
+    def baseline(self, files):
+        (self.root / ".code-health" / "baseline.json").write_text(
+            json.dumps({"schema": 2, "thresholds": {}, "files": files}))
+
+    def config(self, cfg):
+        (self.root / ".code-health" / "config.json").write_text(json.dumps(cfg))
+
+    def test_raising_the_baseline_with_the_growth_is_rejected(self):
+        self.write("a.py", 950)
+        self.baseline({"a.py": {"lines": 950, "tokens": 5000, "functions": {}}})
+        out = run_guard("a.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("a.py", out.stdout)
+        self.assertIn("900 -> 950", out.stdout)
+
+    def test_granting_a_new_file_above_the_threshold_is_rejected(self):
+        self.write("b.py", 700)
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}},
+                       "b.py": {"lines": 700, "tokens": 4000, "functions": {}}})
+        out = run_guard("b.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("b.py", out.stdout)
+
+    def test_deleting_the_baseline_is_rejected(self):
+        (self.root / ".code-health" / "baseline.json").unlink()
+        self.write("b.py", 700)
+        out = run_guard("b.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("deleted", out.stdout)
+
+    def test_loosening_the_config_is_rejected(self):
+        for cfg in ({"exclude": ["b.py"]},
+                    {"thresholds": {"file_lines": {"warn": 2000}}},
+                    {"chars_per_token": 40}):
+            self.config(cfg)
+            out = run_guard(".code-health/config.json", cwd=self.root)
+            self.assertEqual(out.returncode, 1, (cfg, out.stdout))
+
+    def test_a_real_improvement_recorded_in_the_baseline_passes(self):
+        self.write("a.py", 800)
+        self.baseline({"a.py": {"lines": 800, "tokens": 4400, "functions": {}}})
+        self.config({"thresholds": {"file_lines": {"warn": 300}}})
+        out = run_guard("a.py", ".code-health/baseline.json", ".code-health/config.json",
+                        cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_the_install_commit_itself_passes(self):
+        root = Path(tempfile.mkdtemp())
+        self.root = root
+        self.git("init", "-q", "-b", "main")
+        self.write("a.py", 10)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "before install")
+        (root / ".code-health").mkdir()
+        self.write("big.py", 900)
+        self.baseline({"big.py": {"lines": 900, "tokens": 5000, "functions": {}}})
+        out = run_guard("big.py", ".code-health/baseline.json", cwd=root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_base_mode_catches_what_a_skipped_hook_let_through(self):
+        # `git commit --no-verify` skips the hook; a check against the main
+        # branch, run on the server, is where that surfaces.
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("b.py", 700)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "grow")
+        out = run_guard("--base", "main", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("b.py", out.stdout)
+
+        self.git("checkout", "-q", "main")
+        self.git("checkout", "-q", "-b", "feature2")
+        self.write("a.py", 950)
+        self.baseline({"a.py": {"lines": 950, "tokens": 5000, "functions": {}}})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "grow and move the bar")
+        out = run_guard("--base", "main", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("900 -> 950", out.stdout)
+
+    def test_base_mode_passes_a_clean_branch(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("a.py", 850)
+        self.write("c.py", 20)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "shrink")
+        out = run_guard("--base", "main", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_base_mode_refuses_an_unknown_ref(self):
+        out = run_guard("--base", "no-such-branch", cwd=self.root)
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_raising_a_function_ceiling_is_rejected(self):
+        body = "def f(a):\n" + "".join("    a += %d\n" % i for i in range(120)) + \
+            "    return a\n"
+        (self.root / "f.py").write_text(body, encoding="utf-8")
+        target = self.root / ".code-health" / "baseline.json"
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "f")
+        body = body.replace("    return a", "".join("    a -= %d\n" % i for i in range(30))
+                            + "    return a")
+        (self.root / "f.py").write_text(body, encoding="utf-8")
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        out = run_guard("f.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("f.py::f", out.stdout)
 
 class PromisedReportTests(unittest.TestCase):
     """DESIGN 10 and skills/guard/SKILL.md both promise two reports that did
