@@ -72,7 +72,10 @@ written down.
 | `import_cycle` | `imports` |
 | `dead_symbol` | `dead` |
 | `comment_noise` | `comments` |
-| `hotspot`, `symbol_collision`, `edit_fanout` | `derived` |
+| `symbol_collision` | `derived` |
+
+`hotspot` and `edit_fanout` are not finding kinds: `measure.py` reports them as values in
+`layers.derived` (`hotspots`, `edit_fanout`), and a group cites them as evidence.
 
 Pass the values for every kind in the group, comma-separated. Dependencies resolve transitively —
 `--layers dup` pulls in `size`, `--layers derived` pulls in `size`, `churn` and `imports` — so

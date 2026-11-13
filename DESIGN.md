@@ -1,6 +1,6 @@
 # code-health — design
 
-Status: draft for review. Supersedes `plugins/sonar-code-health` (v0.2.0).
+Status: implemented, plugin version 0.6.0. Supersedes `plugins/sonar-code-health` (v0.2.0).
 
 ## 1. Purpose
 
@@ -146,7 +146,7 @@ belongs to the `audit` skill, not to the measurer.
 | `imports` | file enumeration | `import_cycle` |
 | `dead` | file enumeration | `dead_symbol` (Python only; see "L2 — dead code") |
 | `churn` | git history | — (feeds `derived`) |
-| `derived` | `size` + `churn` + `imports` | `hotspot`, `symbol_collision`, `edit_fanout` |
+| `derived` | `size` + `churn` + `imports` | `symbol_collision`; `hotspots` and `edit_fanout` are values in `layers.derived`, not findings |
 | `comments` | file enumeration | `comment_noise` (see "L2 — comments") |
 
 A requested layer whose dependency is unavailable is `not_measured` with the dependency named as
