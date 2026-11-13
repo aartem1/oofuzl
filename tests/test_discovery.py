@@ -64,6 +64,7 @@ class EnumerateTests(unittest.TestCase):
     def test_excluded_paths_appear_in_neither_bucket(self):
         self.write("node_modules/pkg/index.js")
         self.write("packages/web/dist/bundle.js")
+        self.write(".code-health/guard.py")
         self.write("app/main.py")
         inv = D.enumerate_files(self.root, self.cfg)
         self.assertEqual(inv.source, ["app/main.py"])

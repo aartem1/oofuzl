@@ -33,6 +33,9 @@ import tokenize
 from pathlib import Path
 
 BASELINE_RELPATH = Path(".code-health") / "baseline.json"
+# This tool's own folder: the vendored copy of this file must not be checked
+# against the ratchet it implements (it failed the first commit after install).
+TOOL_DIR = "/.code-health"
 CONFIG_RELPATH = Path(".code-health") / "config.json"
 
 DEFAULT_THRESHOLDS = {
@@ -381,7 +384,7 @@ def settings_for(repo_root):
             merged[name].update(override)
     return (merged,
             _chars_per_token(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)),
-            compile_excludes(cfg.get("exclude", [])),
+            compile_excludes([TOOL_DIR] + list(cfg.get("exclude", []))),
             _ticket_ignore(cfg.get("ticket_ref_ignore")))
 
 

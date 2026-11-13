@@ -36,6 +36,9 @@ Only changed files are checked, against exactly one rule:
 
 > No entity may exceed `max(its baseline value, warn)`.
 
+The folder `.code-health/` (the vendored `guard.py`, the baseline, the config) is never checked and
+never enters the baseline, whatever `config.exclude` says.
+
 An entity absent from the baseline has no baseline value, so its ceiling is `warn`. That is the
 whole rule — there is no separate, more permissive case for new code. The alternative (checking new
 entities against `hard` instead) is *more* permissive for new code than for old: it would let a

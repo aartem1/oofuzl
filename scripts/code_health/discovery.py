@@ -35,6 +35,11 @@ BINARY_PROBE_BYTES = 8192
 # The one definition of "this file is code". Duplicated verbatim in
 # `guard.py` as `SUPPORTED_EXT` -- that file never imports code_health --
 # and pinned to this copy by tests/test_parser_agreement.py.
+# The plugin's own folder in a target repository: the vendored guard copy,
+# the baseline and the config. Never the repository's code, and not left to
+# `config.exclude`, which a repository may replace with its own list.
+TOOL_DIR = "/.code-health"
+
 SOURCE_EXT = frozenset({
     ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java",
     ".kt", ".rs", ".rb", ".php", ".c", ".h", ".cpp", ".cc", ".hpp",
@@ -133,7 +138,7 @@ def enumerate_files(repo_root, cfg, restrict=None):
         wanted = set(restrict)
         candidates = [p for p in candidates if p in wanted]
 
-    exclude = [compile_pattern(p) for p in cfg["exclude"]]
+    exclude = [compile_pattern(p) for p in [TOOL_DIR] + list(cfg["exclude"])]
     tests_pat = [compile_pattern(p) for p in cfg["tests"]]
     max_bytes = cfg["max_file_bytes"]
 

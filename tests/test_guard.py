@@ -314,6 +314,18 @@ class BaselineTests(RatchetTests):
         self.assertIn("f", data["files"]["a.py"]["functions"])
 
 
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_the_vendored_guard_itself_is_never_checked(self):
+        # Installing by the skill's steps used to fail the very first commit
+        # on `.code-health/guard.py` itself: 829 lines, new, warn 400.
+        (self.root / ".code-health" / "guard.py").write_text(GUARD.read_text())
+        (self.root / "a.py").write_text("def f(a):\n    return a\n", encoding="utf-8")
+        target = self.root / ".code-health" / "baseline.json"
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(sorted(json.loads(target.read_text())["files"]), ["a.py"])
+        out = run_guard(".code-health/guard.py", "a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
 class PromisedReportTests(unittest.TestCase):
     """DESIGN 10 and skills/guard/SKILL.md both promise two reports that did
     not exist: `compare()` never read `baseline["thresholds"]` (the key was
