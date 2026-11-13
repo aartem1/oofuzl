@@ -43,6 +43,55 @@ _INT_FIELDS = {"nloc", "ccn", "token", "param", "length", "start_line",
 # Chunked so a large repository does not exceed the OS argv limit.
 _ARG_CHUNK = 400
 
+# Same function as guard.py, pinned by tests/test_parser_agreement.py.
+JS_EXT = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+_PAIRS = {"(": ")", "[": "]", "{": "}"}
+_SIGNATURE_LINES = 30
+
+
+def destructured_params(lines, start_line, counted):
+    """lizard's parameter count, with a destructured object or array as one.
+
+    lizard counts every field of `({ title, text, icon }: Props)` as a
+    parameter, so a React component's props count read as its parameters.
+    Reads the first parenthesized list from the function's first line; when
+    one of its top-level items is `{...}` or `[...]`, returns the number of
+    top-level items. Never returns more than lizard counted.
+    """
+    text = "\n".join(lines[start_line - 1:start_line - 1 + _SIGNATURE_LINES])
+    start = text.find("(")
+    if start == -1:
+        return counted
+    items, depth, item, i = [], 0, "", start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in "\"'`":
+            end = text.find(ch, i + 1)
+            if end == -1:
+                return counted
+            item, i = item + text[i:end + 1], end + 1
+            continue
+        if ch == ")" and depth == 0:
+            items.append(item.strip())
+            break
+        if ch in _PAIRS:
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append(item.strip())
+            item = ""
+        else:
+            item += ch
+        i += 1
+    else:
+        return counted
+    items = [x for x in items if x]
+    if not any(x[:1] in "{[" for x in items):
+        return counted
+    return min(counted, len(items))
+
+
 class LizardOutputError(Exception):
     pass
 
@@ -164,6 +213,22 @@ def _apply_nesting_source(repo_root, functions, targets):
     }
 
 
+def _apply_destructured_params(repo_root, functions):
+    """Correct lizard's `param` for JS/TS rows in place (`destructured_params`)."""
+    lines = {}
+    for row in functions:
+        if os.path.splitext(row["filename"])[1] not in JS_EXT:
+            continue
+        if row["filename"] not in lines:
+            try:
+                lines[row["filename"]] = (repo_root / row["filename"]).read_text(
+                    encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines[row["filename"]] = []
+        row["param"] = destructured_params(lines[row["filename"]], row["start_line"],
+                                           row["param"])
+
+
 def measure_sizes(repo_root, inventory, cfg, include_tests=False):
     """The layers.size object. Always returns a status; never raises."""
     targets = list(inventory.source)
@@ -188,6 +253,7 @@ def measure_sizes(repo_root, inventory, cfg, include_tests=False):
     try:
         text = run_lizard(repo_root, targets, argv_prefix)
         layer["functions"] = parse_lizard_csv(text)
+        _apply_destructured_params(repo_root, layer["functions"])
         layer["nesting_source"] = _apply_nesting_source(repo_root, layer["functions"], targets)
     except (LizardOutputError, OSError) as exc:
         layer["status"] = "partial"

@@ -294,6 +294,55 @@ def parse_lizard_csv(text):
     return rows
 
 
+# Same function as code_health/sizes.py, pinned by tests/test_parser_agreement.py.
+JS_EXT = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+_PAIRS = {"(": ")", "[": "]", "{": "}"}
+_SIGNATURE_LINES = 30
+
+
+def destructured_params(lines, start_line, counted):
+    """lizard's parameter count, with a destructured object or array as one.
+
+    lizard counts every field of `({ title, text, icon }: Props)` as a
+    parameter, so a React component's props count read as its parameters.
+    Reads the first parenthesized list from the function's first line; when
+    one of its top-level items is `{...}` or `[...]`, returns the number of
+    top-level items. Never returns more than lizard counted.
+    """
+    text = "\n".join(lines[start_line - 1:start_line - 1 + _SIGNATURE_LINES])
+    start = text.find("(")
+    if start == -1:
+        return counted
+    items, depth, item, i = [], 0, "", start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch in "\"'`":
+            end = text.find(ch, i + 1)
+            if end == -1:
+                return counted
+            item, i = item + text[i:end + 1], end + 1
+            continue
+        if ch == ")" and depth == 0:
+            items.append(item.strip())
+            break
+        if ch in _PAIRS:
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append(item.strip())
+            item = ""
+        else:
+            item += ch
+        i += 1
+    else:
+        return counted
+    items = [x for x in items if x]
+    if not any(x[:1] in "{[" for x in items):
+        return counted
+    return min(counted, len(items))
+
+
 def exceeds(value, ceiling):
     """The one comparison. Fires at value >= ceiling, never at >."""
     return value >= ceiling
@@ -409,7 +458,7 @@ def _chars_per_token(value):
 
 def _read_files(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
     """File-level measurements plus the Python nesting map, from disk only."""
-    files, python_nesting = {}, {}
+    files, python_nesting, js_lines = {}, {}, {}
     for rel in relpaths:
         try:
             text = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
@@ -423,7 +472,9 @@ def _read_files(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset())
         }
         if rel.endswith(".py"):
             python_nesting[rel] = _python_nesting(text)
-    return files, python_nesting
+        elif Path(rel).suffix in JS_EXT:
+            js_lines[rel] = text.splitlines()
+    return files, python_nesting, js_lines
 
 
 # Chunked so a large repository does not exceed the OS argv limit -- same
@@ -454,6 +505,13 @@ def _nesting_for(row, python_nesting):
     # same run (code_health/sizes.py), so a TS file would fail on the depth
     # of whatever else is in the commit. Not measured outside Python.
     return None
+
+
+def _params_for(row, js_lines):
+    lines = js_lines.get(row["filename"])
+    if lines is None:
+        return row["param"]
+    return destructured_params(lines, row["start_line"], row["param"])
 
 
 def function_key(existing, name):
@@ -488,8 +546,8 @@ def function_key(existing, name):
 
 def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
     repo_root = Path(repo_root)
-    files, python_nesting = _read_files(repo_root, relpaths, chars_per_token,
-                                        ticket_ignore)
+    files, python_nesting, js_lines = _read_files(repo_root, relpaths, chars_per_token,
+                                                  ticket_ignore)
     argv = resolve_lizard()
     if argv is None or not files:
         return files, argv is not None
@@ -504,7 +562,8 @@ def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
             continue
         entry["functions"][function_key(entry["functions"], row["function_name"])] = {
             "lines": row["length"], "ccn": row["ccn"],
-            "params": row["param"], "nesting": _nesting_for(row, python_nesting),
+            "params": _params_for(row, js_lines),
+            "nesting": _nesting_for(row, python_nesting),
         }
     return files, True
 

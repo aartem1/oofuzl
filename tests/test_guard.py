@@ -231,6 +231,16 @@ class FunctionRatchetTests(RatchetTests):
         self.assertEqual(out.returncode, 0, out.stdout)
 
 
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_a_new_component_with_five_props_passes(self):
+        self.baseline({})
+        (self.root / "Card.tsx").write_text(
+            "export const Card = ({ title, text, icon, onClick, disabled }: P) => (\n"
+            "    <button onClick={onClick} disabled={disabled}>{icon}{title}{text}</button>\n"
+            ");\n", encoding="utf-8")
+        out = run_guard("Card.tsx", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
 class TicketRefRatchetTests(RatchetTests):
     """Tracker keys in comments: a file-level metric with a fixed warn of 1."""
 

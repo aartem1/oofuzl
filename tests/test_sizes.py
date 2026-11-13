@@ -186,6 +186,24 @@ class NestingSourceTests(unittest.TestCase):
         row = [r for r in layer["functions"] if r["function_name"] == "isEqualValues"][0]
         self.assertIsNone(row["nesting"])
 
+    def test_destructured_props_are_one_parameter(self):
+        # lizard counts every field of a destructured object as a parameter:
+        # a React component with five props read as five parameters and
+        # failed `parameters` (warn 5). In resume-profile-front 192 of 239
+        # parameter findings in TS files were in `.tsx`.
+        (self.root / "card.tsx").write_text(
+            "export const Card = ({ title, text, icon, onClick, disabled }: P) => {\n"
+            "    return <div>{title}</div>;\n"
+            "};\n"
+            "export const Ref = ({ a, b, c, d, e }: P, ref: R) => <i ref={ref} />;\n"
+            "export function plain(a, b, c, d, e) {\n"
+            "    return a;\n"
+            "}\n",
+            encoding="utf-8")
+        layer = S.measure_sizes(self.root, _Inv(["card.tsx"]), self.cfg)
+        params = {r["function_name"]: r["param"] for r in layer["functions"]}
+        self.assertEqual(params, {"Card": 1, "Ref": 2, "plain": 5})
+
     def test_unverified_language_reports_none_not_lizards_number(self):
         # Ruby's trailing-`if` modifier form was verified broken the same
         # way Python's is: `lizard -ENS --csv` reports 3 for a flat

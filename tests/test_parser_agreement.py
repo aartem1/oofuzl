@@ -59,6 +59,13 @@ class ParserAgreementTests(unittest.TestCase):
         guard = load_guard()
         self.assertEqual(set(D.SOURCE_EXT), set(guard.SUPPORTED_EXT))
 
+    def test_both_count_destructured_parameters_the_same_way(self):
+        import inspect
+        guard = load_guard()
+        self.assertEqual(inspect.getsource(S.destructured_params),
+                         inspect.getsource(guard.destructured_params))
+        self.assertEqual(S.JS_EXT, guard.JS_EXT)
+
     def test_both_use_the_same_default_thresholds(self):
         from code_health import config as C
         guard = load_guard()
