@@ -32,6 +32,8 @@ import re
 import tokenize
 from collections import namedtuple
 
+from .discovery import FILE_ONLY_EXT
+
 # 1-based lines. `text` has comment markers stripped; consecutive own-line
 # comments are merged into one record, because every threshold below is
 # defined over a comment as a unit, not over a physical line. `docstring` is
@@ -843,6 +845,10 @@ def measure_comments(repo_root, inventory, cfg):
     ticket_ignore = frozenset(cfg.get("ticket_ref_ignore") or ())
     for rel in inventory.source:
         ext = os.path.splitext(rel)[1].lower()
+        if ext in FILE_ONLY_EXT:
+            # In the inventory for their file size only; comments were never
+            # promised for them, so they are not a gap in this layer.
+            continue
         if ext != ".py" and ext not in BRACE_EXT:
             no_reader += 1
             continue

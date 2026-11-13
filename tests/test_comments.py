@@ -952,6 +952,15 @@ class LayerTests(unittest.TestCase):
         self.assertEqual(layer["not_measured_files"], 1)
         self.assertEqual(layer["status"], "partial")
 
+    def test_files_measured_for_size_only_do_not_make_the_layer_partial(self):
+        # resume-profile-front: 187 `.sh`/`.sql` files turned the layer
+        # `partial` once they entered the inventory for their file size.
+        self._write("a.py", "x = 1\n")
+        self._write("run.sh", "# setup\necho 1\n")
+        layer = CM.measure_comments(self.root, _Inventory(["a.py", "run.sh"]), self.cfg)
+        self.assertEqual(layer["status"], "measured")
+        self.assertEqual([row["path"] for row in layer["files"]], ["a.py"])
+
     def test_all_files_readable_gives_measured(self):
         self._write("a.py", "x = 1\n")
         layer = CM.measure_comments(self.root, _Inventory(["a.py"]), self.cfg)
