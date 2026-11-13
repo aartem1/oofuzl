@@ -706,6 +706,22 @@ class LooseningTests(unittest.TestCase):
         out = run_guard("pkg/a.py", cwd=self.root)
         self.assertEqual(out.returncode, 0, out.stdout)
 
+    def test_a_schema_that_is_not_a_number_is_a_loosening(self):
+        # `"schema": true` was no number, so not "lowered", yet `True < 3`
+        # reopened the one-time upgrade exemption on the next commit.
+        data = json.loads((self.root / ".code-health" / "baseline.json").read_text())
+        data["schema"] = True
+        (self.root / ".code-health" / "baseline.json").write_text(json.dumps(data))
+        out = run_guard(".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_a_new_python_file_that_does_not_parse_does_not_block_update_baseline(self):
+        (self.root / "bad.py").write_text("def f(:\n", encoding="utf-8")
+        self.git("add", "-A")
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_base_mode_catches_what_a_skipped_hook_let_through(self):
         # `git commit --no-verify` skips the hook; a check against the main
         # branch, run on the server, is where that surfaces.

@@ -884,7 +884,7 @@ def report_baseline_moves(previous, current, moves):
               "  improvement, never to get past a failing commit.")
 
 
-def loosening(ref_cfg, ref_base, cfg, base, renames=None, existed=None):
+def loosening(ref_cfg, ref_base, cfg, base, renames=None, existed=None, root=None):
     """How the working tree's config and baseline raise ceilings compared
     with a reference commit's: one line per change, empty when none.
 
@@ -914,10 +914,11 @@ def loosening(ref_cfg, ref_base, cfg, base, renames=None, existed=None):
     if _number(was) and _number(now) and now > was:
         out.append("chars_per_token raised %s -> %s (fewer tokens counted)" % (was, now))
     was_schema, schema = ref_base.get("schema") or 1, base.get("schema") or 1
-    if _number(was_schema) and _number(schema) and schema < was_schema:
-        # An older schema switches `compare` to looser matching.
-        out.append("baseline schema lowered %s -> %s" % (was_schema, schema))
-    out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames, existed))
+    if _number(was_schema) and (not _number(schema) or schema < was_schema):
+        # An older schema switches `compare` to looser matching and reopens
+        # the upgrade exemption in `_raised_ceilings`.
+        out.append("baseline schema lowered %s -> %s" % (was_schema, json.dumps(schema)))
+    out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames, existed, root))
     return out
 
 
@@ -929,7 +930,7 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None):
+def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None, root=None):
     """Every baseline value whose ceiling (`ceiling`) is higher than the
     reference baseline grants. A value that moved below `warn` changes no
     ceiling and is not listed.
@@ -942,7 +943,8 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None):
     # The first baseline written by a guard that measures FILE_ONLY_EXT
     # files and counts `# NOQA`: what was already in the code then is
     # recorded as it is, not counted as raised.
-    upgrade = schema < 3 and _number(base.get("schema")) and base["schema"] >= 3
+    upgrade = (_number(schema) and schema < 3
+               and _number(base.get("schema")) and base["schema"] >= 3)
     old_files = ref_base.get("files") or {}
     out = []
     for path, current in sorted((base.get("files") or {}).items()):
@@ -959,7 +961,7 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None):
             for label, key, tkey in checks:
                 value, was = values.get(key), before.get(key)
                 if (value is None and tkey in _FIXED_WARN and entity is None
-                        and (was is not None or (old is None and _has_comment_reader(path)))):
+                        and (was is not None or (old is None and _has_comment_reader(path, root)))):
                     # `compare` reads a missing value as "predates the
                     # metric" and stops checking it for this file.
                     out.append("%-44s %-22s %s -> missing"
@@ -979,8 +981,20 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None):
     return out
 
 
-def _has_comment_reader(path):
-    return Path(path).suffix == ".py" or Path(path).suffix in BRACE_EXT
+def _has_comment_reader(path, root=None):
+    """Whether the guard can count comment lines in `path`: a brace
+    language, or Python that parses (read from `root` when given)."""
+    if Path(path).suffix in BRACE_EXT:
+        return True
+    if Path(path).suffix != ".py":
+        return False
+    if root is None:
+        return True
+    try:
+        text = (Path(root) / path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    return _python_comment_lines(text, text.split("\n")) is not None
 
 
 def report_loosening(ref, lines):
@@ -1013,7 +1027,7 @@ def write_baseline(repo_root, target, settings, accept_worse=False):
     # is earlier and says why.
     raised = (_raised_ceilings(outgoing, document, thresholds,
                                _renames(repo_root, [_anchor(repo_root, outgoing, "HEAD")]),
-                               lambda p: _exists_at(repo_root, "HEAD", p))
+                               lambda p: _exists_at(repo_root, "HEAD", p), repo_root)
               if outgoing else [])
     if raised and not accept_worse:
         print("code-health guard: the new baseline would raise %d ceiling(s); nothing written\n"
@@ -1078,7 +1092,7 @@ def main(argv=None):
                            else [since] if args.check else ["--cached", since])
     loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH), ref_base,
                       load_json(repo_root / CONFIG_RELPATH, {}), baseline, renames,
-                      lambda p: _exists_at(repo_root, ref, p))
+                      lambda p: _exists_at(repo_root, ref, p), repo_root)
     if loose:
         report_loosening(ref, loose)
         return 1
