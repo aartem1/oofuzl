@@ -987,7 +987,8 @@ With confirmation, in this order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell]
+           always_run: true
    ```
 
    That block is an **entry** under a top-level `repos:` list, not a whole file. Append it to an
@@ -995,10 +996,9 @@ With confirmation, in this order:
    content is `repos:` followed by the same block. A model installing into a fresh repository has
    no other way to know this from the snippet alone.
 
-   `pass_filenames: true` and `types: [file]` are pre-commit defaults and are omitted. `types_or`
-   is what earns its place: it makes pre-commit skip the hook entirely when a commit touches only
-   docs, instead of paying process startup for `guard.py` to filter them. `json` is listed so that
-   a change to the baseline or config alone still reaches the hook.
+   `pass_filenames: true` and `types: [file]` are pre-commit defaults and are omitted.
+   `always_run: true` makes every commit reach the hook, also one that only edits or deletes the
+   baseline or config: pre-commit passes no deleted files. `types_or` selects the file names.
 
    **The tag list must cover `SUPPORTED_EXT`.** A file whose type is not listed never reaches the
    hook at all, so an extension the hook claims to check and pre-commit never delivers is checked
@@ -1078,7 +1078,8 @@ check existed has no `ticket_refs` for the file; that grants nothing and forbids
 keys. `null` (a language with no comment reader, Python that does not parse) is never checked,
 on either side: a baseline that recorded `null` grants and forbids nothing, like a missing key. A
 file moved in a way git recognises (`git diff -M`) keeps its old path's baseline, for this check
-and for size alike; a file rewritten on the way is a new path and faces `warn` 1.
+and for size alike; a file rewritten on the way is a new path and faces `warn` 1. Moves are
+counted from the commit that last changed the baseline, so they hold until `update-baseline`.
 `guard.py` cannot import `code_health`, so the comment reader and detector are copied into it and
 pinned to the originals by `tests/test_parser_agreement.py`.
 
@@ -1089,12 +1090,16 @@ The text does not suggest `git commit --no-verify`.
 Before the comparison the hook reads `baseline.json` and `config.json` at `HEAD` and rejects a
 commit that raises a ceiling through them: a baseline value grown to or past `warn`, a new entity
 granted at or above `warn`, a loosened threshold, a larger `chars_per_token`, a new `exclude` or
-`ticket_ref_ignore` entry, a deleted baseline. `--base REF` runs the same check for a CI job:
-files changed since the merge base with `REF`, judged against `REF`'s baseline and config.
+`ticket_ref_ignore` entry, a `ticket_refs` or `suppressions` value removed from a record, a lower
+`schema`, a deleted baseline. Files of the types measured since schema 3 (`.vue`, `.svelte`, `.sql`,
+`.sh`) entering a baseline whose previous schema was lower are not counted as raised. `--base REF`
+runs the same check for a CI job: files changed since the merge base with `REF`, judged against
+the merge base's baseline and config; no merge base (a shallow clone) exits 2.
 
 Performance budget: ≤2 s for 20 changed files. Measured on the calibration machine:
 `lizard -ENS --csv` over 20 files totalling 72,900 lines takes 0.57 s. `guard.py` in the hook path
-does one lizard subprocess, one JSON read, two `git show HEAD:` reads, one `git diff -M` for moved files and no network.
+does one lizard subprocess, one JSON read, two `git show HEAD:` reads, one `git log` and one
+`git diff -M` for moved files, and no network.
 
 ### One measurement path, one lizard version
 

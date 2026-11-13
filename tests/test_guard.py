@@ -422,6 +422,11 @@ class SuppressionRatchetTests(RatchetTests):
         out = run_guard("b.tsx", cwd=self.root)
         self.assertEqual(out.returncode, 1, out.stdout)
 
+    def test_an_uppercase_noqa_counts(self):
+        self.baseline({})
+        (self.root / "d.py").write_text("import os  # NOQA\n", encoding="utf-8")
+        self.assertEqual(run_guard("d.py", cwd=self.root).returncode, 1)
+
     def test_the_words_in_a_string_or_docstring_are_not_a_suppression(self):
         self.baseline({})
         (self.root / "c.py").write_text(
@@ -582,6 +587,78 @@ class LooseningTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         self.git("commit", "-q", "-m", "move")
         out = run_guard("--base", "main~1", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_removing_a_check_from_the_baseline_is_a_loosening(self):
+        # Deleting `suppressions` from a file's record switched the check off
+        # for that file, and the commit adding `# noqa` passed.
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "ticket_refs": 0,
+                                "suppressions": 0, "functions": {}}})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "with metric")
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "ticket_refs": 0,
+                                "functions": {}}})
+        out = run_guard(".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("linter suppressions", out.stdout)
+
+    def test_lowering_the_baseline_schema_is_a_loosening(self):
+        data = json.loads((self.root / ".code-health" / "baseline.json").read_text())
+        data["schema"] = 1
+        (self.root / ".code-health" / "baseline.json").write_text(json.dumps(data))
+        out = run_guard(".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_a_moved_file_keeps_its_baseline_after_the_move_commit(self):
+        (self.root / "pkg").mkdir()
+        self.git("mv", "a.py", "pkg/a.py")
+        self.git("commit", "-q", "-m", "move")
+        self.write("pkg/a.py", 890)
+        self.git("add", "-A")
+        out = run_guard("pkg/a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.git("add", "-A")
+        out = run_guard("pkg/a.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_base_mode_judges_the_branch_against_the_merge_base(self):
+        # main improved a.py after the branch left it; the branch never
+        # touched the baseline and must not read as loosening it.
+        self.git("checkout", "-q", "-b", "feature")
+        self.write("c.py", 20)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "feature")
+        self.git("checkout", "-q", "main")
+        self.write("a.py", 800)
+        self.baseline({"a.py": {"lines": 800, "tokens": 4400, "functions": {}}})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "improve")
+        self.git("checkout", "-q", "feature")
+        out = run_guard("--base", "main", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_base_mode_without_a_merge_base_fails_loudly(self):
+        self.git("checkout", "-q", "--orphan", "lonely")
+        self.write("big.py", 900)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "unrelated")
+        out = run_guard("--base", "main", cwd=self.root)
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+
+    def test_files_measured_for_the_first_time_after_an_upgrade_are_not_a_loosening(self):
+        # A 500-line deploy.sh that the old guard never measured enters the
+        # baseline above warn on the first update-baseline after upgrading.
+        self.write("deploy.sh", 500)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "script")
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.git("add", "-A")
+        out = run_guard(".code-health/baseline.json", cwd=self.root)
         self.assertEqual(out.returncode, 0, out.stdout)
 
     def test_base_mode_catches_what_a_skipped_hook_let_through(self):

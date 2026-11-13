@@ -62,8 +62,8 @@ already-modified file, so it does not try. An abort at that point stops the cycl
 1. Parse the command into a selection: a single label, an ordered list of labels, `--p0`/`--p1`
    (every group at that priority in the ledger, in ledger order), or `--resume` (continue a queue
    already in progress).
-2. Resolve the repository's main working tree — the parent folder of
-   `git rev-parse --path-format=absolute --git-common-dir`, the same from every worktree — and
+2. Resolve the repository's main working tree — the path on the first
+   `worktree` line of `git worktree list --porcelain`, the same from every worktree — and
    derive the same project key `audit` uses; load the ledger from
    `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json` and require its
    `repo_path` to match that main working tree. A mismatch or a missing ledger stops here — ask the

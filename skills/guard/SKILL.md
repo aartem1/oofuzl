@@ -69,7 +69,9 @@ this check has no `ticket_refs` for its files and is not checked on them until t
 `update-baseline`.
 
 A file moved with `git mv` (or any move git itself recognises, `git diff -M`) keeps its old path's
-baseline: moving files is ordinary tidying, not new code. A file that git does not see as moved —
+baseline: moving files is ordinary tidying, not new code. Moves are counted from the commit that
+last changed the baseline, so the file keeps it in later commits too, until `update-baseline`
+records the new path. A file that git does not see as moved —
 rewritten past half its content on the way — is a new path and faces `warn`.
 
 **Linter suppressions** (`suppressions`) follow the same rule with `warn` fixed at `1`: comment lines
@@ -109,7 +111,8 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell]
+           always_run: true
    ```
 
 
@@ -127,15 +130,16 @@ With confirmation, in this exact order:
            language: python
            additional_dependencies: ["lizard==1.23.0"]
            types_or: [python, javascript, ts, tsx, jsx, go, java, kotlin, rust, ruby, php, c, c++, c#,
-                      swift, scala, lua, objective-c, vue, svelte, sql, shell, json]
+                      swift, scala, lua, objective-c, vue, svelte, sql, shell]
+           always_run: true
    ```
 
    `pass_filenames: true` and `types: [file]` are pre-commit defaults and are deliberately omitted.
-   `types_or` earns its place: it is what makes pre-commit skip the hook entirely when a commit
-   touches only docs, instead of paying process startup for `guard.py` to filter them out itself.
-   `json` is in the list so that a commit changing only `.code-health/baseline.json` or
-   `config.json` still reaches the hook (section 8). Do not trim the tag list: a type that is missing from it never reaches the hook, so an
-   extension `guard.py` claims to check would end up checked by nobody.
+   `always_run: true` runs the hook on every commit, also one that only edits or deletes
+   `.code-health/baseline.json` or `config.json`: pre-commit passes no deleted files, and without
+   it such a commit would never reach the check in section 8. `types_or` decides which file names
+   the hook gets. Do not trim the tag list: a type that is missing from it never reaches the hook,
+   so an extension `guard.py` claims to check would end up checked by nobody.
 3. **Vendor `<plugin-root>/scripts/guard.py` to `.code-health/guard.py`.** This copy is
    self-contained (standard library plus the `lizard` binary pre-commit provides) so a colleague
    without this plugin and a CI runner both pass the same hook. If a copy already exists and differs
@@ -201,7 +205,11 @@ When the new baseline would raise any ceiling — a value grown to or past `warn
 granted at or above it — the script writes nothing, lists those entities and exits 1. That is the
 same change the hook rejects at commit time. `--accept-worse` writes it anyway; pass it only when
 the user explicitly decided to raise the bar for those entities, never on your own to get a commit
-through.
+through. The hook rejects that baseline too, so the person commits it themselves with
+`git commit --no-verify`, and the CI check of section 7 fails on it in the pull request, where the
+reviewer sees what was raised. Files that the guard measures for the first time after an upgrade
+(`.vue`, `.svelte`, `.sql`, `.sh`) are not "raised": the first `update-baseline` records them
+without `--accept-worse`.
 
 `update-baseline` is **never** run as part of `/code-health:fix`. It is a separate, deliberate act
 taken after a real improvement lands, not an automatic step in the fix cycle and not an escape hatch
@@ -231,9 +239,10 @@ git show origin/main:.code-health/guard.py | python - --base origin/main
 ```
 
 `--base REF` checks every file changed since the merge base with `REF` and compares the branch's
-baseline and config with `REF`'s, so a branch that grew code past the ceiling, or moved the bar,
-fails there. The script is taken from `REF` too, so the branch cannot change the check that judges
-it. The CI checkout needs enough history for the merge base (for example `fetch-depth: 0`).
+baseline and config with the merge base's, so a branch that grew code past the ceiling, or moved
+the bar, fails there, and what `REF` did after the branch left it does not count. The script is
+taken from `REF`, so the branch cannot change the check that judges it. The CI checkout needs the
+history down to the merge base (for example `fetch-depth: 0`); without it the script exits 2.
 When proposing this job, show it and let the user add it; `install` does not write CI files.
 
 ## 8. Never move the baseline to escape a failing commit
@@ -244,12 +253,14 @@ the growth the hook just caught become the new permanent floor. Use it only afte
 actually gotten smaller or simpler, never before.
 
 The hook enforces this. It compares `.code-health/baseline.json` and `config.json` with their
-versions at `HEAD` (at `REF` with `--base`) and rejects the commit when they raise any ceiling:
+versions at `HEAD` (at the merge base with `REF` with `--base`) and rejects the commit when they
+raise any ceiling:
 
 - a baseline value that grew to or past `warn`, or a new entity granted at or above `warn`;
+- a `ticket_refs` or `suppressions` value removed from a file's record, which stops that check;
 - a loosened threshold, a larger `chars_per_token`, a new `exclude` or `ticket_ref_ignore` entry;
-- a deleted baseline.
+- a lower `schema`, or a deleted baseline.
 
 A value that moved below `warn` changes no ceiling and passes; so does any improvement, and the
 install commit, which has no baseline at `HEAD`. Raising the bar on purpose is a person's decision:
-they commit it themselves, and the CI check above shows it in the pull request.
+they commit it themselves (section 5), and the CI check above shows it in the pull request.

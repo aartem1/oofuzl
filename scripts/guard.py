@@ -13,8 +13,10 @@ ceiling is warn. There is no separate, more permissive case for new code --
 that would let a brand-new 800-line file through while failing an existing
 401-line one.
 
-In the hook path this makes no git calls: pre-commit passes the file list and
-stashes unstaged changes, so reading from disk reads the staged content.
+In the hook path pre-commit passes the file list and stashes unstaged
+changes, so reading from disk reads the staged content. Git is asked only
+for what the disk cannot say: the committed baseline and config to compare
+against, and which files were moved since the baseline was written.
 """
 
 import argparse
@@ -61,6 +63,8 @@ SUPPORTED_EXT = {
 }
 # Measured for file size only, same as code_health/discovery.py.
 FILE_ONLY_EXT = frozenset({".vue", ".svelte", ".sql", ".sh"})
+# 3: FILE_ONLY_EXT files are measured. 2: functions keyed by qualified name.
+BASELINE_SCHEMA = 3
 
 FUNC_FIELDS = ("nloc", "ccn", "token", "param", "length", "location",
                "filename", "function_name", "long_name", "start_line",
@@ -212,7 +216,7 @@ TICKET_REF_WARN = 1
 SUPPRESSION_WARN = 1
 _SUPPRESSION_RE = re.compile(
     r"\bnoqa\b|\btype:\s*ignore\b|\bpylint:\s*disable|\bpyright:\s*ignore\b"
-    r"|eslint-disable|@ts-(?:ignore|expect-error|nocheck)\b")
+    r"|eslint-disable|@ts-(?:ignore|expect-error|nocheck)\b", re.IGNORECASE)
 
 
 def ticket_refs(line, ignore=frozenset()):
@@ -909,6 +913,10 @@ def loosening(ref_cfg, ref_base, cfg, base, renames=None):
     now = cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)
     if _number(was) and _number(now) and now > was:
         out.append("chars_per_token raised %s -> %s (fewer tokens counted)" % (was, now))
+    was_schema, schema = ref_base.get("schema") or 1, base.get("schema") or 1
+    if _number(was_schema) and _number(schema) and schema < was_schema:
+        # An older schema switches `compare` to looser matching.
+        out.append("baseline schema lowered %s -> %s" % (was_schema, schema))
     out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames))
     return out
 
@@ -925,11 +933,16 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None):
     """Every baseline value whose ceiling (`ceiling`) is higher than the
     reference baseline grants. A value that moved below `warn` changes no
     ceiling and is not listed."""
-    legacy = (ref_base.get("schema") or 1) < 2
+    schema = ref_base.get("schema") or 1
+    legacy = schema < 2
     old_files = ref_base.get("files") or {}
     out = []
     for path, current in sorted((base.get("files") or {}).items()):
         old = _base_entry(old_files, path, renames)
+        if old is None and schema < 3 and Path(path).suffix in FILE_ONLY_EXT:
+            # The first baseline after the upgrade that measures these
+            # files: they were there before, only not counted.
+            continue
         funcs = current.get("functions") or {}
         matched = _matched_baselines(funcs, (old or {}).get("functions") or {}, legacy)
         entities = [(None, _FILE_CHECKS, current, old or {})]
@@ -938,6 +951,11 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None):
         for entity, checks, values, before in entities:
             for label, key, tkey in checks:
                 value, was = values.get(key), before.get(key)
+                if value is None and was is not None and tkey in _FIXED_WARN:
+                    # `compare` reads a missing value as "predates the
+                    # metric" and stops checking it for this file.
+                    out.append("%-44s %-22s %s -> removed" % (path, label, was))
+                    continue
                 # A file whose old record lacks a metric predates it, the
                 # same rule `compare` applies.
                 if value is None or (entity is None and old is not None and was is None):
@@ -974,11 +992,12 @@ def write_baseline(repo_root, target, settings, accept_worse=False):
     # whole point of `update-baseline` printing what moved.
     outgoing = load_json(target, None) if target.exists() else None
     previous = (outgoing or {}).get("files") or {}
-    document = {"schema": 2, "generated_at": _now(), "head": _head(repo_root),
+    document = {"schema": BASELINE_SCHEMA, "generated_at": _now(), "head": _head(repo_root),
                 "thresholds": thresholds, "files": files}
     # The same rule the hook applies to the committed result: refusing here
     # is earlier and says why.
-    raised = (_raised_ceilings(outgoing, document, thresholds, _renames(repo_root, ["HEAD"]))
+    raised = (_raised_ceilings(outgoing, document, thresholds,
+                               _renames(repo_root, [_baseline_commit(repo_root, "HEAD")]))
               if outgoing else [])
     if raised and not accept_worse:
         print("code-health guard: the new baseline would raise %d ceiling(s); nothing written\n"
@@ -1018,17 +1037,28 @@ def main(argv=None):
     if args.baseline:
         return write_baseline(repo_root, args.baseline, settings, args.accept_worse)
 
-    if args.base and not _is_commit(repo_root, args.base):
-        sys.stderr.write("code-health guard: %s is not a commit\n" % args.base)
-        return 2
-    ref = args.base or "HEAD"
+    ref = "HEAD"
+    if args.base:
+        if not _is_commit(repo_root, args.base):
+            sys.stderr.write("code-health guard: %s is not a commit\n" % args.base)
+            return 2
+        # The branch is judged against where it left REF: what REF did
+        # since is not the branch's change.
+        ref = _merge_base(repo_root, args.base)
+        if ref is None:
+            sys.stderr.write("code-health guard: no merge base with %s; "
+                             "fetch the full history (fetch-depth: 0)\n" % args.base)
+            return 2
     baseline_path = repo_root / BASELINE_RELPATH
     baseline = load_json(baseline_path, {"files": {}}) if baseline_path.exists() else None
-    # Moves since `ref`: staged ones in the hook (pre-commit has stashed
-    # the rest), the working tree in `--check`, the branch with `--base`.
-    renames = (_renames(repo_root, ["%s...HEAD" % args.base]) if args.base
-               else _renames(repo_root, ["HEAD"] if args.check else ["--cached", "HEAD"])
-               if baseline is not None else {})
+    # Moves since the baseline was committed, up to what is checked: the
+    # staged tree in the hook (pre-commit has stashed the rest), the working
+    # tree in `--check`, the branch tip with `--base`.
+    renames = {}
+    if baseline is not None:
+        since = _baseline_commit(repo_root, ref)
+        renames = _renames(repo_root, [since, "HEAD"] if args.base
+                           else [since] if args.check else ["--cached", since])
     loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH),
                       _ref_json(repo_root, ref, BASELINE_RELPATH),
                       load_json(repo_root / CONFIG_RELPATH, {}), baseline, renames)
@@ -1037,7 +1067,7 @@ def main(argv=None):
         return 1
 
     if args.base:
-        targets = _changed_since(repo_root, args.base)
+        targets = _changed_since(repo_root, ref)
     else:
         targets = _changed(repo_root) if args.check else list(args.files)
     targets = [t for t in targets
@@ -1113,6 +1143,20 @@ def _git_show(repo_root, ref, relpath):
     if out.returncode != 0:
         return None
     return out.stdout.decode("utf-8", "replace")
+
+
+def _merge_base(repo_root, ref):
+    out = subprocess.run(["git", "-C", str(repo_root), "merge-base", ref, "HEAD"],
+                         capture_output=True, text=True)
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def _baseline_commit(repo_root, ref):
+    """The last commit up to `ref` that changed the baseline: its paths are
+    the paths of that tree. `ref` itself when git cannot say."""
+    out = subprocess.run(["git", "-C", str(repo_root), "log", "-1", "--format=%H", ref,
+                          "--", BASELINE_RELPATH], capture_output=True, text=True)
+    return (out.stdout.strip() if out.returncode == 0 else "") or ref
 
 
 def _ref_json(repo_root, ref, relpath):
