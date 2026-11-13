@@ -365,6 +365,26 @@ class BaselineTests(RatchetTests):
         self.assertIn("f", data["files"]["a.py"]["functions"])
 
 
+    def test_update_baseline_refuses_to_raise_a_ceiling_unless_told_to(self):
+        # A function cut from 100 to 40 lines could grow back to 100 after
+        # any `update-baseline`, and nothing asked whether that was meant.
+        target = self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}}})
+        self.write("a.py", 950)
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("900 -> 950", out.stdout)
+        self.assertEqual(json.loads(target.read_text())["files"]["a.py"]["lines"], 900)
+        out = run_guard("--baseline", str(target), "--repo", str(self.root), "--accept-worse")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(json.loads(target.read_text())["files"]["a.py"]["lines"], 950)
+
+    def test_update_baseline_records_an_improvement_without_asking(self):
+        target = self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}}})
+        self.write("a.py", 850)
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertEqual(json.loads(target.read_text())["files"]["a.py"]["lines"], 850)
+
     @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
     def test_the_vendored_guard_itself_is_never_checked(self):
         # Installing by the skill's steps used to fail the very first commit

@@ -917,7 +917,7 @@ def report_loosening(ref, lines):
           % (BASELINE_RELPATH, CONFIG_RELPATH))
 
 
-def write_baseline(repo_root, target, settings):
+def write_baseline(repo_root, target, settings, accept_worse=False):
     thresholds, chars_per_token, exclude, ticket_ignore = settings
     files, had_lizard = measure(repo_root, _all_supported(repo_root, exclude),
                                 chars_per_token, ticket_ignore)
@@ -927,15 +927,25 @@ def write_baseline(repo_root, target, settings):
     target = Path(target)
     # Read the OUTGOING baseline before overwriting it -- that diff is the
     # whole point of `update-baseline` printing what moved.
-    previous = load_json(target, {}).get("files") or {}
+    outgoing = load_json(target, None) if target.exists() else None
+    previous = (outgoing or {}).get("files") or {}
+    document = {"schema": 2, "generated_at": _now(), "head": _head(repo_root),
+                "thresholds": thresholds, "files": files}
+    # The same rule the hook applies to the committed result: refusing here
+    # is earlier and says why.
+    raised = _raised_ceilings(outgoing, document, thresholds) if outgoing else []
+    if raised and not accept_worse:
+        print("code-health guard: the new baseline would raise %d ceiling(s); nothing written\n"
+              % len(raised))
+        for line in raised[:_MAX_LISTED_MOVES]:
+            print("  " + line)
+        if len(raised) > _MAX_LISTED_MOVES:
+            print("  ... and %d more" % (len(raised) - _MAX_LISTED_MOVES))
+        print("\nRecord a baseline after the code got smaller or simpler. Raising the bar is a\n"
+              "person's decision: they pass --accept-worse and commit it themselves.")
+        return 1
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({
-        "schema": 2,
-        "generated_at": _now(),
-        "head": _head(repo_root),
-        "thresholds": thresholds,
-        "files": files,
-    }, indent=2, sort_keys=True), encoding="utf-8")
+    target.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
     print("code-health guard: baseline written for %d file(s)" % len(files))
     report_baseline_moves(previous, files, baseline_moves(previous, files))
     return 0
@@ -947,6 +957,8 @@ def main(argv=None):
     parser.add_argument("--repo", default=".")
     parser.add_argument("--baseline")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--accept-worse", action="store_true",
+                        help="with --baseline: write it even if a ceiling goes up")
     # For a CI job: check everything changed since REF against REF's
     # baseline and config. A skipped hook (`--no-verify`, a clone without
     # `pre-commit install`) surfaces here.
@@ -958,7 +970,7 @@ def main(argv=None):
     thresholds, chars_per_token, exclude, ticket_ignore = settings
 
     if args.baseline:
-        return write_baseline(repo_root, args.baseline, settings)
+        return write_baseline(repo_root, args.baseline, settings, args.accept_worse)
 
     if args.base and not _is_commit(repo_root, args.base):
         sys.stderr.write("code-health guard: %s is not a commit\n" % args.base)

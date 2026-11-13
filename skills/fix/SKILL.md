@@ -297,6 +297,11 @@ green or red.
 `pending` in the queue, and any item stopped for escalation or a red gate. Omit this section only
 when there is nothing meaningful to report.
 
+When the repository has `.code-health/baseline.json` and at least one group made code smaller or
+simpler, end with one line suggesting `/code-health:guard update-baseline`: until it runs, the
+ratchet still allows the old size, and the improved code can grow back to it. Do not run it
+yourself.
+
 Keep the announcement concise. Do not paste raw scanner output, long lists of touched files, or
 generic claims such as "everything is fine." Say only what was actually verified.
 

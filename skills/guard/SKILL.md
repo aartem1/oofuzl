@@ -188,6 +188,12 @@ it reads the outgoing baseline before overwriting it. Relay that output — do n
 lines away. A metric that moved up is the ratchet slipping, not routine churn, and it should never
 scroll past unremarked.
 
+When the new baseline would raise any ceiling — a value grown to or past `warn`, or a new entity
+granted at or above it — the script writes nothing, lists those entities and exits 1. That is the
+same change the hook rejects at commit time. `--accept-worse` writes it anyway; pass it only when
+the user explicitly decided to raise the bar for those entities, never on your own to get a commit
+through.
+
 `update-baseline` is **never** run as part of `/code-health:fix`. It is a separate, deliberate act
 taken after a real improvement lands, not an automatic step in the fix cycle and not an escape hatch
 reached for while a fix is still in progress (Hard rules).
