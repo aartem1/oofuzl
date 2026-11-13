@@ -188,7 +188,7 @@ def _apply_nesting_source(repo_root, functions, targets):
     python_rows, errors = _pyast.measure_nesting(repo_root, targets)
     by_key = {}
     for row in python_rows:
-        by_key.setdefault((row["file"], row["start_line"]), row["nesting"])
+        by_key.setdefault((row["file"], row["start_line"]), row)
 
     matched = unmatched = dropped = 0
     for row in functions:
@@ -196,7 +196,8 @@ def _apply_nesting_source(repo_root, functions, targets):
         if ext == ".py":
             key = (row["filename"], row["start_line"])
             if key in by_key:
-                row["nesting"] = by_key[key]
+                row["nesting"] = by_key[key]["nesting"]
+                row["qualname"] = by_key[key]["qualname"]
                 matched += 1
             else:
                 row["nesting"] = None

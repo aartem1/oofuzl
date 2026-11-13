@@ -149,6 +149,37 @@ def _python_nesting(source):
     }
 
 
+# Same function as code_health/pyast.py, pinned by tests/test_parser_agreement.py.
+def qualified_names(tree):
+    """`{def line: "Class.method"}` for every function in `tree`.
+
+    lizard reports a Python method by its bare name, so `Tiny.__init__`
+    and `Big.__init__` arrive as two `__init__` rows. The enclosing class
+    and function names, joined by dots, tell them apart without a line
+    number. Nested functions get `outer.inner`, the form lizard itself uses.
+    """
+    out = {}
+    pending = [(tree, "")]
+    while pending:
+        node, prefix = pending.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = prefix + child.name
+                if not isinstance(child, ast.ClassDef):
+                    out[child.lineno] = name
+                pending.append((child, name + "."))
+            else:
+                pending.append((child, prefix))
+    return out
+
+
+def _python_qualnames(source):
+    try:
+        return qualified_names(ast.parse(source))
+    except (SyntaxError, ValueError):
+        return {}
+
+
 # Tracker keys in comments. The same reader and detector as
 # code_health/comments.py (`ticket_refs`, `extract_brace`, `_physical_lines`),
 # duplicated for the reason the nesting pass above is; the parser agreement
@@ -471,7 +502,7 @@ def _read_files(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset())
             "functions": {},
         }
         if rel.endswith(".py"):
-            python_nesting[rel] = _python_nesting(text)
+            python_nesting[rel] = (_python_nesting(text), _python_qualnames(text))
         elif Path(rel).suffix in JS_EXT:
             js_lines[rel] = text.splitlines()
     return files, python_nesting, js_lines
@@ -500,7 +531,7 @@ def _nesting_for(row, python_nesting):
     if ext == ".py":
         # A row whose start line has no match in `_python_nesting` (should
         # be rare; see pyast.measure_nesting) is `None`, not a guess.
-        return python_nesting.get(row["filename"], {}).get(row["start_line"])
+        return python_nesting.get(row["filename"], ({}, {}))[0].get(row["start_line"])
     # lizard's nesting counter carries over from the previous file of the
     # same run (code_health/sizes.py), so a TS file would fail on the depth
     # of whatever else is in the commit. Not measured outside Python.
@@ -514,17 +545,22 @@ def _params_for(row, js_lines):
     return destructured_params(lines, row["start_line"], row["param"])
 
 
+def _function_name(row, python_nesting):
+    """A Python function by its class-qualified name (`Big.__init__`),
+    anything else by lizard's name."""
+    qualnames = python_nesting.get(row["filename"], ({}, {}))[1]
+    return qualnames.get(row["start_line"], row["function_name"])
+
+
 def function_key(existing, name):
     """The baseline key for one function row: its name, disambiguated by
     order of appearance in the file when the name is not unique there.
 
-    lizard reports BARE names for Python methods -- `A.handler` and
-    `B.handler` both arrive as `handler` (verified: two rows, one
-    `function_name`). Keying the baseline on the bare name collapsed them
-    into one entry, last row winning, so a 201-line method and a 2-line
-    method in one file recorded `{"handler": {"lines": 2}}` and the
-    201-line one vanished from the ratchet permanently -- appending a tiny
-    same-named function was enough to hide an arbitrarily large one.
+    Python methods are keyed by class-qualified name (`_function_name`), so
+    `#2` is left for what is still same-named: TS `(anonymous)` functions,
+    a function defined twice. `compare` matches same-named functions as a
+    group, not by this number, so a new one above an old one does not move
+    the old one onto the new one's ceiling.
 
     The key is deliberately NOT `(name, start_line)` or lizard's `location`
     field, both of which carry line numbers. Demonstrated: adding one
@@ -560,7 +596,8 @@ def measure(repo_root, relpaths, chars_per_token, ticket_ignore=frozenset()):
         entry = files.get(row["filename"])
         if entry is None:
             continue
-        entry["functions"][function_key(entry["functions"], row["function_name"])] = {
+        name = _function_name(row, python_nesting)
+        entry["functions"][function_key(entry["functions"], name)] = {
             "lines": row["length"], "ccn": row["ccn"],
             "params": _params_for(row, js_lines),
             "nesting": _nesting_for(row, python_nesting),
@@ -600,21 +637,58 @@ def ceiling(baseline_value, warn):
 def compare(measured, baseline, thresholds):
     violations = []
     base_files = baseline.get("files", {})
+    # Schema 1 keyed Python methods by lizard's bare name (`__init__#2`);
+    # matching on the last dotted part on both sides reads it unchanged.
+    legacy = (baseline.get("schema") or 1) < 2
     for path, current in sorted(measured.items()):
         base = base_files.get(path, {})
-        base_funcs = base.get("functions", {})
         if path in base_files and base.get("ticket_refs") is None:
             # A baseline written before this metric existed, or on a Python
             # that could not parse the file, grants nothing and forbids
             # nothing for it until `update-baseline`.
             current = dict(current, ticket_refs=None)
+        base_funcs = _matched_baselines(current["functions"],
+                                        base.get("functions", {}), legacy)
         entities = [(None, current, base, _FILE_CHECKS)]
-        entities.extend((name, func, base_funcs.get(name, {}), _FUNC_CHECKS)
+        entities.extend((name, func, base_funcs[name], _FUNC_CHECKS)
                         for name, func in sorted(current["functions"].items()))
         for entity, values, base_values, checks in entities:
             violations.extend(
                 _entity_violations(path, entity, values, base_values, checks, thresholds))
     return violations
+
+
+_SUFFIX_RE = re.compile(r"#\d+$")
+
+
+def _group_of(key, legacy):
+    name = _SUFFIX_RE.sub("", key)
+    return name.rsplit(".", 1)[-1] if legacy else name
+
+
+def _matched_baselines(current, base, legacy):
+    """`{current key: {metric: baseline value}}`, same-named functions matched
+    as a group: per metric, the largest current value meets the largest
+    baseline value, the second the second, and any extra faces `warn`.
+
+    Matching by the `#2` number moved an untouched function onto another's
+    ceiling whenever a same-named one was added above it."""
+    groups = {}
+    for key in current:
+        groups.setdefault(_group_of(key, legacy), ([], []))[0].append(key)
+    for key, values in base.items():
+        if _group_of(key, legacy) in groups:
+            groups[_group_of(key, legacy)][1].append(values)
+    out = {key: {} for key in current}
+    for keys, base_rows in groups.values():
+        for _, metric in _FUNC_MOVES:
+            ranked = sorted((k for k in keys if current[k].get(metric) is not None),
+                            key=lambda k: -current[k][metric])
+            olds = sorted((row[metric] for row in base_rows
+                           if row.get(metric) is not None), reverse=True)
+            for key, old in zip(ranked, olds):
+                out[key][metric] = old
+    return out
 
 
 def _entity_violations(path, entity, values, base_values, checks, thresholds):
@@ -771,7 +845,7 @@ def write_baseline(repo_root, target, settings):
     previous = load_json(target, {}).get("files") or {}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({
-        "schema": 1,
+        "schema": 2,
         "generated_at": _now(),
         "head": _head(repo_root),
         "thresholds": thresholds,

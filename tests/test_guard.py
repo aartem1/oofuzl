@@ -196,10 +196,9 @@ class FunctionRatchetTests(RatchetTests):
         out = run_guard("--baseline", str(target), "--repo", str(self.root))
         self.assertEqual(out.returncode, 0, out.stderr)
         funcs = json.loads(target.read_text())["files"]["m.py"]["functions"]
-        self.assertEqual(sorted(funcs), ["handler", "handler#2"])
-        # Order of appearance, not lizard's row order: the big one is first.
-        self.assertEqual(funcs["handler"]["lines"], 200)
-        self.assertEqual(funcs["handler#2"]["lines"], 2)
+        self.assertEqual(sorted(funcs), ["A.handler", "B.handler"])
+        self.assertEqual(funcs["A.handler"]["lines"], 200)
+        self.assertEqual(funcs["B.handler"]["lines"], 2)
 
     @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
     def test_the_large_same_named_function_is_still_ratcheted(self):
@@ -240,6 +239,54 @@ class FunctionRatchetTests(RatchetTests):
             ");\n", encoding="utf-8")
         out = run_guard("Card.tsx", cwd=self.root)
         self.assertEqual(out.returncode, 0, out.stdout)
+
+    def write_big_class(self, tiny_above):
+        tiny = "class Tiny:\n    def __init__(self):\n        self.x = 1\n\n\n" if tiny_above else ""
+        big = "class Big:\n    def __init__(self):\n" + "".join(
+            "        self.a%d = %d\n" % (i, i) for i in range(70))
+        (self.root / "big.py").write_text(tiny + big, encoding="utf-8")
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_a_same_named_method_added_above_does_not_shift_an_old_one(self):
+        # A small class with its own `__init__` added above `Big` used to
+        # renumber the keys: `Big.__init__` became `__init__#2`, compared
+        # against nothing, and failed as new ("71 >= 60") untouched.
+        self.write_big_class(tiny_above=False)
+        target = self.root / ".code-health" / "baseline.json"
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.write_big_class(tiny_above=True)
+        out = run_guard("big.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_an_old_baseline_keyed_by_bare_names_still_matches(self):
+        # Baselines written before class-qualified names (schema 1) key a
+        # method by lizard's bare name. Upgrading the guard must not turn
+        # every method in them into a new entity.
+        self.baseline({"big.py": {"lines": 80, "tokens": 900, "functions": {
+            "__init__": {"lines": 71, "ccn": 1, "params": 1, "nesting": 0}}}})
+        self.write_big_class(tiny_above=True)
+        self.assertEqual(run_guard("big.py", cwd=self.root).returncode, 0)
+
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_same_named_functions_are_compared_as_a_group(self):
+        # TS anonymous functions all share one name. A new small one added
+        # above a long grandfathered one must not move the long one onto
+        # the small one's ceiling, and growing the long one still fails.
+        def write(extra_small, long_lines):
+            text = "setTimeout(() => {\n    run();\n});\n" if extra_small else ""
+            text += "export default () => {\n" + "".join(
+                "    let a%d = %d;\n" % (i, i) for i in range(long_lines)) + "};\n"
+            (self.root / "m.ts").write_text(text, encoding="utf-8")
+        write(False, 80)
+        target = self.root / ".code-health" / "baseline.json"
+        run_guard("--baseline", str(target), "--repo", str(self.root))
+        write(True, 80)
+        self.assertEqual(run_guard("m.ts", cwd=self.root).returncode, 0)
+        write(True, 90)
+        out = run_guard("m.ts", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("function lines", out.stdout)
 
 class TicketRefRatchetTests(RatchetTests):
     """Tracker keys in comments: a file-level metric with a fixed warn of 1."""

@@ -296,6 +296,30 @@ def max_nesting(node):
     return _max_depth(node.body, 0)
 
 
+# Same function as guard.py, pinned by tests/test_parser_agreement.py.
+def qualified_names(tree):
+    """`{def line: "Class.method"}` for every function in `tree`.
+
+    lizard reports a Python method by its bare name, so `Tiny.__init__`
+    and `Big.__init__` arrive as two `__init__` rows. The enclosing class
+    and function names, joined by dots, tell them apart without a line
+    number. Nested functions get `outer.inner`, the form lizard itself uses.
+    """
+    out = {}
+    pending = [(tree, "")]
+    while pending:
+        node, prefix = pending.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = prefix + child.name
+                if not isinstance(child, ast.ClassDef):
+                    out[child.lineno] = name
+                pending.append((child, name + "."))
+            else:
+                pending.append((child, prefix))
+    return out
+
+
 def measure_nesting(repo_root, relpaths):
     """Per-function exact nesting depth for every `.py` path in `relpaths`.
 
@@ -324,11 +348,13 @@ def measure_nesting(repo_root, relpaths):
         except (OSError, SyntaxError, ValueError) as exc:
             errors.append({"file": relpath, "error": str(exc)})
             continue
+        qualnames = qualified_names(tree)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 rows.append({
                     "file": relpath,
                     "function": node.name,
+                    "qualname": qualnames.get(node.lineno, node.name),
                     "start_line": node.lineno,
                     "end_line": getattr(node, "end_lineno", node.lineno),
                     "nesting": max_nesting(node),

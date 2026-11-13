@@ -74,12 +74,26 @@ def resolve_layers(requested):
 
 
 def _subject_id(subject):
-    """The finding id's subject half: a function's `file:function:start_line`
-    (the join key `sizes.py`/`pyast.py` use elsewhere), or a file's bare
-    path when there is no function."""
+    """The finding id's subject half: `file:function` or a file's bare path.
+
+    No line number: `fix` looks the id up after re-measuring, and any edit
+    above the function -- the previous item of the same queue included --
+    moved the line and dropped a live finding as "gone". Same-named
+    functions in one file get `#2`, `#3` by order (`_function_ids`)."""
     if "function" in subject:
-        return "%s:%s:%s" % (subject["file"], subject["function"], subject["start_line"])
+        return "%s:%s" % (subject["file"], subject["function_id"])
     return subject["file"]
+
+
+def _function_ids(functions):
+    """`{id(row): "name" or "name#k"}`: a Python method by its class-qualified
+    name, any remaining same-named functions in one file by order."""
+    out, seen = {}, {}
+    for row in sorted(functions, key=lambda r: (r["filename"], r["start_line"])):
+        name = row.get("qualname") or row["function_name"]
+        count = seen[(row["filename"], name)] = seen.get((row["filename"], name), 0) + 1
+        out[id(row)] = name if count == 1 else "%s#%d" % (name, count)
+    return out
 
 
 def _finding(kind, level, subject, measurement, evidence):
@@ -114,10 +128,12 @@ def size_findings(layer, cfg):
                 {"lines": row.get("lines"), "tokens": row.get("tokens")},
             ))
 
+    function_ids = _function_ids(layer.get("functions", []))
     for row in layer.get("functions", []):
         subject = {
             "file": row["filename"],
             "function": row["function_name"],
+            "function_id": function_ids[id(row)],
             "start_line": row["start_line"],
             "end_line": row["end_line"],
         }

@@ -86,6 +86,27 @@ class SizeFindingTests(unittest.TestCase):
         }]}
         out = F.size_findings(layer, self.cfg)
         self.assertFalse(any(f["kind"] == "too_deep_nesting" for f in out))
+    def test_a_function_finding_id_survives_a_line_shift(self):
+        # `fix` re-measures a group's files and looks its finding ids up; a
+        # line number in the id dropped a live finding after any edit above
+        # the function, including the previous item of the same queue.
+        def ids(start):
+            layer = {"files": [], "functions": [{
+                "filename": "a.py", "function_name": "fat", "qualname": "Job.fat",
+                "param": 1, "ccn": 1, "length": 80, "nesting": 0,
+                "start_line": start, "end_line": start + 79, "token": 10}]}
+            return [f["id"] for f in F.size_findings(layer, self.cfg)]
+        self.assertEqual(ids(3), ids(4))
+        self.assertEqual(ids(3), ["function_too_long:a.py:Job.fat"])
+
+    def test_same_named_functions_still_get_distinct_ids(self):
+        rows = [{"filename": "a.ts", "function_name": "(anonymous)", "param": 1,
+                 "ccn": 1, "length": 80, "nesting": None, "start_line": n,
+                 "end_line": n + 79, "token": 10} for n in (200, 1)]
+        ids = [f["id"] for f in F.size_findings({"files": [], "functions": rows}, self.cfg)]
+        self.assertEqual(ids, ["function_too_long:a.ts:(anonymous)",
+                               "function_too_long:a.ts:(anonymous)#2"])
+
 
 class SummaryTests(unittest.TestCase):
     def setUp(self):

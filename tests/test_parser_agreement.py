@@ -59,6 +59,12 @@ class ParserAgreementTests(unittest.TestCase):
         guard = load_guard()
         self.assertEqual(set(D.SOURCE_EXT), set(guard.SUPPORTED_EXT))
 
+    def test_both_name_python_functions_the_same_way(self):
+        import inspect
+        guard = load_guard()
+        self.assertEqual(inspect.getsource(PA.qualified_names),
+                         inspect.getsource(guard.qualified_names))
+
     def test_both_count_destructured_parameters_the_same_way(self):
         import inspect
         guard = load_guard()

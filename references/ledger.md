@@ -54,8 +54,11 @@ for a second machine or a second contributor to inherit verbatim.
 
 ## Group identity: `gid` versus `label`
 
-`gid` is **content-derived**: `"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`. Finding
-ids follow the same shape where a finding has no single subject path: a near-duplicate cluster's id
+`gid` is **content-derived**: `"<kind-prefix>-" + sha1(kind + sorted subject paths)[:8]`. A function
+finding's id is `<kind>:<file>:<function>` with no line number, so an edit above the function does
+not make a live finding look gone; a Python method is named with its class (`Job.run`), and
+same-named functions left in one file get `#2`, `#3` by order. Finding ids follow the same shape
+where a finding has no single subject path: a near-duplicate cluster's id
 is `near_duplicate:cluster/<sha1 of the cluster's sorted `file:function` members>[:8]`, matching the
 example above. "Stable across runs" means *the same code always produces the same id* — it is not a
 claim that an id survives the code changing. A cluster that gained or lost a member is a different
