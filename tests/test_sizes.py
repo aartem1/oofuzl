@@ -18,6 +18,34 @@ SAMPLE_CSV = (
 )
 
 
+
+# A TSX file whose braces lizard's reader miscounts, and a flat TS function
+# that follows it in the same lizard run (see the nesting tests below).
+CONFUSING_TSX = (
+    "type Props = Base & {\n"
+    "};\n"
+    "export const Card: FC<Props> = ({ link, children, 'data-qa': dataQa, onClick }) => {\n"
+    "    if (!link) {\n"
+    "        return (\n"
+    "            <div className={styles.card} data-qa={dataQa} onClick={onClick}>\n"
+    "                {children}\n"
+    "            </div>\n"
+    "        );\n"
+    "    }\n"
+    "    return (\n"
+    "        <Link to={link} onClick={onClick} data-qa={dataQa} className={styles.card}>\n"
+    "            {children}\n"
+    "        </Link>\n"
+    "    );\n"
+    "};\n"
+)
+FLAT_TS = (
+    "export function isEqualValues(a: number, b: number): boolean {\n"
+    "    if (a > b) {\n        return false;\n    }\n"
+    "    if (b > a) {\n        return false;\n    }\n"
+    "    return true;\n}\n"
+)
+
 class CsvParseTests(unittest.TestCase):
     def test_parses_twelve_columns(self):
         rows = S.parse_lizard_csv(SAMPLE_CSV)
@@ -145,22 +173,18 @@ class NestingSourceTests(unittest.TestCase):
         layer = S.measure_sizes(self.root, _Inv(["deep.py"]), self.cfg)
         self.assertEqual(layer["functions"][0]["nesting"], 5)
 
-    def test_brace_language_keeps_lizards_value(self):
-        (self.root / "deep.js").write_text(
-            "function deep(x) {\n"
-            "    if (x === 1) {\n"
-            "        if (x === 2) {\n"
-            "            if (x === 3) {\n"
-            "                return 3;\n"
-            "            }\n"
-            "        }\n"
-            "    }\n"
-            "    return 0;\n"
-            "}\n",
-            encoding="utf-8")
-        layer = S.measure_sizes(self.root, _Inv(["deep.js"]), self.cfg)
-        self.assertEqual(layer["functions"][0]["nesting"], 3)
-        self.assertEqual(layer["nesting_source"]["kept_from_lizard"], 1)
+    def test_a_ts_file_measured_after_a_confusing_tsx_is_not_reported_deep(self):
+        # lizard carries its nesting counter from one file to the next after
+        # a file its reader gets wrong. Measured with lizard 1.23.0: a
+        # function with two sequential `if`s (depth 1) reports 2 when this
+        # ordinary React component precedes it in one run, and more after
+        # several such files. A number that depends on the neighbouring file is
+        # not a measurement, so non-Python nesting is not measured.
+        (self.root / "a.tsx").write_text(CONFUSING_TSX, encoding="utf-8")
+        (self.root / "lib.ts").write_text(FLAT_TS, encoding="utf-8")
+        layer = S.measure_sizes(self.root, _Inv(["a.tsx", "lib.ts"]), self.cfg)
+        row = [r for r in layer["functions"] if r["function_name"] == "isEqualValues"][0]
+        self.assertIsNone(row["nesting"])
 
     def test_unverified_language_reports_none_not_lizards_number(self):
         # Ruby's trailing-`if` modifier form was verified broken the same

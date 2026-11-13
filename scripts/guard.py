@@ -62,18 +62,6 @@ FUNC_FIELDS = ("nloc", "ccn", "token", "param", "length", "location",
 _INT_FIELDS = {"nloc", "ccn", "token", "param", "length", "start_line",
                "end_line", "nesting"}
 
-# Extensions whose lizard reader was verified, with a flat-vs-deep probe, to
-# reset its nesting counter correctly (see code_health/sizes.py and
-# references/tools.md for the full verification). Every other extension,
-# `.py` included, never keeps lizard's raw nesting number.
-_LIZARD_NESTING_OK_EXT = {
-    ".c", ".h", ".cpp", ".cc", ".hpp",
-    ".cs", ".java",
-    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
-    ".go", ".kt", ".rs", ".swift", ".scala", ".php",
-    ".m", ".mm",
-}
-
 # Same nesting-depth pass as code_health/pyast.py, duplicated on purpose --
 # this file never imports code_health, the same reason the CSV parser above
 # is duplicated rather than shared. Keep the two in sync; the parser
@@ -456,14 +444,12 @@ def _lizard_rows(repo_root, argv, relpaths):
 def _nesting_for(row, python_nesting):
     ext = Path(row["filename"]).suffix
     if ext == ".py":
-        # Lizard's own Python nesting column is a monotonically increasing
-        # counter across the whole invocation (verified in sizes.py /
-        # references/tools.md), never trusted here. A row whose start line
-        # has no match in `_python_nesting` (should be rare; see
-        # pyast.measure_nesting) is `None`, not a guess.
+        # A row whose start line has no match in `_python_nesting` (should
+        # be rare; see pyast.measure_nesting) is `None`, not a guess.
         return python_nesting.get(row["filename"], {}).get(row["start_line"])
-    if ext in _LIZARD_NESTING_OK_EXT:
-        return row["nesting"]
+    # lizard's nesting counter carries over from the previous file of the
+    # same run (code_health/sizes.py), so a TS file would fail on the depth
+    # of whatever else is in the commit. Not measured outside Python.
     return None
 
 

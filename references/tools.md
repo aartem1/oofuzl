@@ -56,9 +56,19 @@ python  5 sequential `if`s (function depth 1)  -> nesting=5   (should be 1)
 python  5 nested `if`s     (function depth 5)  -> nesting=5   (correct only by coincidence)
 ruby    3 trailing-`if`s   (function depth 1)  -> nesting=3   (should be 1)
 lua     5 sequential `if`/`then`/`end`         -> nesting=5   (should be 1)
-js      flat / 5-deep                          -> 1 / 5       (correct)
+js      flat / 5-deep                          -> 1 / 5       (correct when measured alone)
 c, c++, c#, java, go, kotlin, rust, swift,
-scala, php, objective-c    flat / 5-deep       -> 1 / 5       (correct, every one tested)
+scala, php, objective-c    flat / 5-deep       -> 1 / 5       (correct when measured alone)
+```
+
+"Measured alone" is the catch. Brace readers reset on `}`, but the counter is still carried from one
+file to the next, and after a file the reader gets wrong it starts too high. An ordinary typed React
+component is enough (`CONFUSING_TSX` in `tests/test_sizes.py`):
+
+```
+lizard -ENS --csv lib.ts                -> isEqualValues nesting=1
+lizard -ENS --csv card.tsx lib.ts       -> isEqualValues nesting=2
+three such components, then lib.ts      -> isEqualValues nesting=4
 ```
 
 And it does not reset between files or functions in one invocation, because `measure.py` chunks its
@@ -80,9 +90,9 @@ reliably agree between the two (lizard qualifies it, e.g. `outer.inner`; `ast` r
 decorators included. `scripts/guard.py` carries an independent copy of the same AST pass, for the
 same reason it already carries its own CSV parser: it cannot import `code_health`.
 
-For every language *not* verified above (`.rb`, `.lua`, and anything else `sizes.py`/`guard.py` has
-not confirmed resets correctly), nesting is reported as `None` — "not measured" — rather than
-lizard's unverified, possibly-accumulating number. `None` never reaches the `>=` threshold
+For every language other than Python nesting is reported as `None` — "not measured" — rather than
+lizard's number, which depends on the files measured before it. Running lizard once per file would
+make the brace languages correct again, at a large cost in time on a big repository. `None` never reaches the `>=` threshold
 comparison and never produces a `too_deep_nesting` finding; it is not silently treated as zero.
 
 ## `git log --numstat` — churn

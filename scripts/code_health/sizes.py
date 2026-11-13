@@ -8,12 +8,13 @@ Two facts drive this module:
     Without it there is no nesting data at all, and the threshold field is
     named `max_nested_structures` — `-Tnd=` is rejected.
 
-A third fact drives the nesting column specifically, verified with a
-flat-vs-deep probe (`references/tools.md`): lizard's nesting reader resets
-on a closing brace, so it is correct for brace/semicolon languages and wrong
--- a monotonically increasing, cross-function, cross-file counter -- for
-Python (indentation-based) and every other reader with nothing to key a
-reset on. `_apply_nesting_source` below is what corrects this after parsing.
+A third fact drives the nesting column specifically: lizard's nesting
+counter is not reset between files of one run. For Python it only ever grows;
+for brace languages it holds within a clean file but carries over after a
+file its reader gets wrong -- an ordinary React component is enough
+(tests/test_sizes.py). A number that depends on which file came before is
+not a measurement, so `_apply_nesting_source` takes Python nesting from the
+AST and reports every other language as not measured.
 """
 
 import csv
@@ -41,26 +42,6 @@ _INT_FIELDS = {"nloc", "ccn", "token", "param", "length", "start_line",
 
 # Chunked so a large repository does not exceed the OS argv limit.
 _ARG_CHUNK = 400
-
-# Extensions whose lizard reader was verified, with a flat-vs-deep probe, to
-# reset its nesting counter correctly: a 5-sequential-`if` function reports
-# nesting 1 and a 5-deep-nested-`if` function reports 5, for every one of
-# these. All are brace/semicolon readers, matching `lizardnd.py`'s
-# `bracket = '}'` default reset. Kept as lizard's own value, unchanged.
-#
-# Verified BROKEN by the same probe and therefore never trusted from
-# lizard: `.py` (indentation, corrected below from the AST instead),
-# `.rb` (trailing-`if`/`unless` modifiers keep accumulating), `.lua`
-# (`then`/`end`, no bracket to reset on). Any extension not in this set and
-# not `.py` gets nesting set to `None` -- "not measured", never a guess.
-_LIZARD_NESTING_OK_EXT = {
-    ".c", ".h", ".cpp", ".cc", ".hpp",
-    ".cs", ".java",
-    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
-    ".go", ".kt", ".rs", ".swift", ".scala", ".php",
-    ".m", ".mm",
-}
-
 
 class LizardOutputError(Exception):
     pass
@@ -149,8 +130,8 @@ def _apply_nesting_source(repo_root, functions, targets):
     the join is not proven exhaustive) gets `nesting = None` rather than
     lizard's uncorrected, potentially-accumulating number.
 
-    For every other extension, lizard's value is kept only when verified
-    correct (`_LIZARD_NESTING_OK_EXT`); everything else becomes `None`.
+    Every other extension becomes `None`: lizard's value there depends on
+    the files measured before it in the same run (module docstring).
 
     Returns a small summary dict recorded on the layer, so a consumer can
     tell "measured, matched" from "measured, unmatched" from "not measured".
@@ -160,7 +141,7 @@ def _apply_nesting_source(repo_root, functions, targets):
     for row in python_rows:
         by_key.setdefault((row["file"], row["start_line"]), row["nesting"])
 
-    matched = unmatched = kept = dropped = 0
+    matched = unmatched = dropped = 0
     for row in functions:
         ext = os.path.splitext(row["filename"])[1]
         if ext == ".py":
@@ -171,8 +152,6 @@ def _apply_nesting_source(repo_root, functions, targets):
             else:
                 row["nesting"] = None
                 unmatched += 1
-        elif ext in _LIZARD_NESTING_OK_EXT:
-            kept += 1
         else:
             row["nesting"] = None
             dropped += 1
@@ -180,7 +159,6 @@ def _apply_nesting_source(repo_root, functions, targets):
     return {
         "python_matched": matched,
         "python_unmatched": unmatched,
-        "kept_from_lizard": kept,
         "not_measured": dropped,
         "python_parse_errors": errors,
     }

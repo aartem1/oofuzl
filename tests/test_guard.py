@@ -439,6 +439,21 @@ class NestingTests(unittest.TestCase):
         self.assertTrue(had_lizard)
         self.assertIsNone(files["flat.rb"]["functions"]["flat"]["nesting"])
 
+    @unittest.skipUnless(_HAS_LIZARD, "lizard not installed")
+    def test_a_ts_file_is_not_judged_by_its_neighbours_nesting(self):
+        # One commit touching an ordinary React component and a flat TS
+        # file: lizard's leaked counter used to fail the TS file at
+        # "nesting depth 3 >= 3 (new)" on a function of depth 1.
+        from test_sizes import CONFUSING_TSX, FLAT_TS
+        root = Path(tempfile.mkdtemp())
+        names = []
+        for index in range(3):
+            (root / ("c%d.tsx" % index)).write_text(CONFUSING_TSX, encoding="utf-8")
+            names.append("c%d.tsx" % index)
+        (root / "lib.ts").write_text(FLAT_TS, encoding="utf-8")
+        files, _ = self.guard.measure(root, names + ["lib.ts"], 4)
+        self.assertIsNone(files["lib.ts"]["functions"]["isEqualValues"]["nesting"])
+
     def test_none_nesting_is_never_checked_and_never_crashes(self):
         guard = self.guard
         measured = {"a.rb": {"lines": 10, "tokens": 20, "functions": {

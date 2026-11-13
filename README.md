@@ -71,12 +71,10 @@ nothing else in this plugin produces them. **A Sonar-less audit can therefore st
 raise a P0**, because the P0 tier is defined by evidence only Sonar produces. The report says this
 plainly instead of implying the repository has no P0-level problems.
 
-**Nesting depth is not one tool across all languages.** `lizard`'s nesting counter only resets
-correctly on languages whose readers emit real block/statement delimiters (C/C++/C#, Java, JS/TS,
-Go, Kotlin, Rust, Swift, Scala, PHP, Objective-C); indentation-based readers never emit those, so
-for Python this plugin computes nesting depth itself from the same AST pass that measures imports
-and symbols, and for languages neither path covers (Ruby, Lua) nesting is reported as unavailable
-rather than as a wrong number.
+**Nesting depth is measured for Python only.** The plugin computes it from the same AST pass that
+measures imports and symbols. For every other language nesting is reported as not measured:
+lizard's nesting counter carries over from one file to the next within a run, so a TypeScript
+function's depth would depend on which file was measured before it.
 
 ## Default thresholds — profile `agent`
 
@@ -99,7 +97,7 @@ per-run flag.
 
 | Tool | Needed for | If missing |
 |---|---|---|
-| `lizard` | size, complexity, parameters, nesting for brace-delimited languages — the one hard requirement | installed automatically (`uv tool install` → `pipx` → a plugin-owned venv) |
+| `lizard` | size, complexity, parameters — the one hard requirement | installed automatically (`uv tool install` → `pipx` → a plugin-owned venv) |
 | `git` | churn, and every churn-derived metric | already present on essentially every target repository |
 | Docker + SonarQube | the L1 layer | `L1: not measured`, audit continues |
 | `pre-commit` | activating the `guard` hook | `guard install` reports and stops before writing anything |
