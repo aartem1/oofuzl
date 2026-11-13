@@ -174,6 +174,16 @@ def _read_slice(repo_root, row):
     return "\n".join(lines[row["start_line"] - 1:row["end_line"]])
 
 
+def _nested(a, b):
+    """One function's lines lie inside the other's in the same file: a
+    function and its own nested function share text by construction, so
+    they are not a duplicate anyone can merge."""
+    if a["filename"] != b["filename"]:
+        return False
+    return ((a["start_line"] <= b["start_line"] and b["end_line"] <= a["end_line"])
+            or (b["start_line"] <= a["start_line"] and a["end_line"] <= b["end_line"]))
+
+
 def find_near_duplicates(repo_root, functions, cfg):
     options = cfg["near_duplicate"]
     min_tokens = options["min_tokens"]
@@ -206,6 +216,8 @@ def find_near_duplicates(repo_root, functions, cfg):
     scored = []
     for a, b in candidates:
         ea, eb = entries[a], entries[b]
+        if _nested(ea["row"], eb["row"]):
+            continue
         big, small = max(ea["tokens"], eb["tokens"]), min(ea["tokens"], eb["tokens"])
         if small == 0 or big / float(small) > SIZE_RATIO:
             continue

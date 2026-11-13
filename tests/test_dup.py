@@ -157,5 +157,32 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(payload["clusters"], [])
 
 
+    def test_a_function_and_its_own_nested_function_are_not_a_duplicate(self):
+        # The outer function contains the inner one's text, so the two look
+        # alike. 31 of 164 groups in one repository were such pairs, and on
+        # this plugin's own code `find_cycles` with `find_cycles.strongconnect`.
+        root = Path(tempfile.mkdtemp())
+        cfg = C.load_config(root)
+        body = (
+            "def outer(store, key, ttl, user, scope):\n"
+            "    def inner(store, key, ttl, user, scope):\n"
+            "        cached = store.get(key)\n"
+            "        if cached is not None and not cached.expired(ttl):\n"
+            "            return cached.value\n"
+            "        value = build(key, user, scope)\n"
+            "        store.put(key, value, ttl)\n"
+            "        return value\n"
+            "    return inner(store, key, ttl, user, scope)\n"
+        )
+        (root / "m.py").write_text(body, encoding="utf-8")
+        functions = [
+            {"filename": "m.py", "function_name": "outer", "start_line": 1,
+             "end_line": 9, "token": 80},
+            {"filename": "m.py", "function_name": "outer.inner", "start_line": 2,
+             "end_line": 8, "token": 60},
+        ]
+        payload = DUP.find_near_duplicates(root, functions, cfg)
+        self.assertEqual(payload["clusters"], [])
+
 if __name__ == "__main__":
     unittest.main()
