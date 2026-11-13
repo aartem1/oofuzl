@@ -70,6 +70,21 @@ class EnumerateTests(unittest.TestCase):
         self.assertEqual(inv.source, ["app/main.py"])
         self.assertEqual(inv.tests, [])
 
+    def test_react_tests_and_vendored_tool_files_are_not_source(self):
+        # resume-profile-front: the first duplicate group was the vendored
+        # `.yarn/releases/yarn-3.6.0.cjs`, and TSX tests counted as source.
+        self.write("src/Card.tsx")
+        self.write("src/Card.test.tsx")
+        self.write("src/Card.spec.jsx")
+        self.write("src/__tests__/card.ts")
+        self.write(".yarn/releases/yarn-3.6.0.cjs")
+        self.write("coverage/lcov-report/prettify.js")
+        self.write("static/vendor.min.js")
+        inv = D.enumerate_files(self.root, self.cfg)
+        self.assertEqual(inv.source, ["src/Card.tsx"])
+        self.assertEqual(sorted(inv.tests), ["src/Card.spec.jsx", "src/Card.test.tsx",
+                                             "src/__tests__/card.ts"])
+
     def test_binary_files_are_skipped_and_counted(self):
         # The binary probe only ever sees files that carry a source
         # extension now, so the fixture has to be one: a UTF-16-encoded

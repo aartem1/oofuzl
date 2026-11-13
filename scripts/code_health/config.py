@@ -28,11 +28,14 @@ DEFAULTS = {
         "**/node_modules/**", "**/.venv/**", "**/venv/**", "**/dist/**",
         "**/build/**", "**/__pycache__/**", "**/.mypy_cache/**",
         "**/.ruff_cache/**", "**/.worktrees/**",
+        # Vendored and generated files nobody edits by hand.
+        "**/.yarn/**", "**/coverage/**", "**/*.min.js",
     ],
     "tests": [
-        "**/tests/**", "**/test/**", "**/spec/**",
+        "**/tests/**", "**/test/**", "**/spec/**", "**/__tests__/**",
         "**/test_*.py", "**/*_test.py", "**/*_test.go",
-        "**/*.test.ts", "**/*.test.js", "**/*.spec.ts", "**/*.spec.js",
+        "**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.jsx",
+        "**/*.spec.ts", "**/*.spec.tsx", "**/*.spec.js", "**/*.spec.jsx",
     ],
     "churn_window_days": 180,
     "chars_per_token": 4,
