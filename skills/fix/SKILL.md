@@ -32,8 +32,10 @@ the only skill in this plugin that writes code and commits.
   code into unnecessary layers/helpers just to lower a metric.
 - Preserve public behavior and contracts unless the selected finding inherently requires a behavior
   change and the intended behavior is clear.
-- Work happens in the **main working tree, no worktree** — the gate needs the repository's installed
-  dependencies, which an isolated worktree would not have.
+- Work happens in the working tree the user started in. A git worktree is fine when the project's
+  test command runs there (its dependencies are installed); otherwise use the main working tree. The
+  ledger is found through the repository's shared `.git` folder (step 1), so the main tree and its
+  worktrees share one ledger — run one fix queue per repository at a time.
 - `fix` never turns into `audit`, and `audit` never turns into `fix`. The ledger is a locator, not a
   source of truth (`<plugin-root>/references/ledger.md`): when the stored analysis does not match
   the current source, `fix` runs its own read-only measurement inside the fix session rather than
@@ -60,9 +62,11 @@ already-modified file, so it does not try. An abort at that point stops the cycl
 1. Parse the command into a selection: a single label, an ordered list of labels, `--p0`/`--p1`
    (every group at that priority in the ledger, in ledger order), or `--resume` (continue a queue
    already in progress).
-2. Resolve the repository root and derive the same project key `audit` uses; load the ledger from
+2. Resolve the repository's main working tree — the parent folder of
+   `git rev-parse --path-format=absolute --git-common-dir`, the same from every worktree — and
+   derive the same project key `audit` uses; load the ledger from
    `${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json` and require its
-   `repo_path` to match the current repository. A mismatch or a missing ledger stops here — ask the
+   `repo_path` to match that main working tree. A mismatch or a missing ledger stops here — ask the
    user to run `/code-health:audit` first rather than guessing at findings.
 3. **Resolve every label to its `gid` against the current ledger's `groups`, before anything else.**
    Labels (`A1…An`) are a fresh, priority-ordered display convenience reassigned by every audit run;

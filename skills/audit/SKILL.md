@@ -49,8 +49,11 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
 2. Record: current branch and `HEAD` SHA; whether the working tree is clean; existing
    tracked/staged changes; repository remote when available.
 3. Derive a deterministic project key from the repository identity. Prefer the Git remote
-   owner/repository; otherwise use the repository basename plus a short stable hash of its absolute
-   path. Never require a project config file in the target repository (`.code-health/config.json`
+   owner/repository; otherwise use the basename of the main working tree plus a short stable hash of
+   its absolute path. The main working tree is the parent folder of
+   `git rev-parse --path-format=absolute --git-common-dir`: it is the same from every worktree of
+   the repository, so an audit run in a worktree and a fix run in the main tree find one ledger.
+   Record that path as the ledger's `repo_path`. Never require a project config file in the target repository (`.code-health/config.json`
    is optional and, when present, only overrides thresholds/excludes — see DESIGN §6).
 
 ## 2. Run the local measurer — always, first

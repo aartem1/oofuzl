@@ -14,6 +14,10 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.json
 data that has no business being committed to the repository it describes, and that would be wrong
 for a second machine or a second contributor to inherit verbatim.
 
+One ledger per repository, not per working tree: `repo_path` is the main working tree, the parent
+folder of `git rev-parse --path-format=absolute --git-common-dir`, which is the same from the main
+tree and from every git worktree of it.
+
 ## Schema
 
 ```jsonc
