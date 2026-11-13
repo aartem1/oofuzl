@@ -50,13 +50,13 @@ class GracefulAbsenceTests(unittest.TestCase):
             seen.append(argv)
             return type("P", (), {"returncode": 0, "stdout": "{}"})()
 
-        original = EX._run
-        EX._run = fake_run
+        original = EX._run_to_file
+        EX._run_to_file = fake_run
         try:
             EX.run_madge(self.root, ["a.js", "b.ts", "c.py"],
                          {"available": True, "reason": None})
         finally:
-            EX._run = original
+            EX._run_to_file = original
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0][-2:], ["a.js", "b.ts"])
         self.assertNotIn(str(self.root), seen[0])
@@ -128,6 +128,24 @@ class GracefulAbsenceTests(unittest.TestCase):
         self.assertEqual(pairs, [["a.py", "b.py"], ["a.py", "c.py"]])
         self.assertEqual(set(Path(tempfile.gettempdir()).glob("code-health-jscpd-*")), before)
 
+    def test_a_real_madge_graph_larger_than_a_pipe_buffer_is_read_whole(self):
+        # On macOS madge's stdout through a pipe stopped at 65536 bytes with
+        # exit code 0, and the import layer came back "output unreadable".
+        state = EX.probe("madge")
+        if not state["available"]:
+            self.skipTest("madge not installed")
+        root = Path(tempfile.mkdtemp())
+        names = ["module_%03d_%s" % (i, "x" * 90) for i in range(300)]
+        for i, name in enumerate(names):
+            imports = "".join("import './%s';\n" % names[(i + k) % len(names)]
+                              for k in (1, 2, 3))
+            (root / (name + ".js")).write_text(imports + "export default %d;\n" % i,
+                                               encoding="utf-8")
+        out = EX.run_madge(root, [n + ".js" for n in names], state)
+        self.assertEqual(out["status"], "measured", out.get("reason"))
+        self.assertEqual(len(out["graph"]), 300)
+        self.assertEqual(len(out["graph"][names[0] + ".js"]), 3)
+
 class NpxProvisioningTests(unittest.TestCase):
     """`npx -y <pkg>` populates npx's own cache, which `npx --no-install` never
     consults: the tool that was just installed successfully was then reported
@@ -197,14 +215,14 @@ class NpxProvisioningTests(unittest.TestCase):
 
     def test_runners_invoke_the_path_binary_when_probe_found_one(self):
         calls, fake = self._fake_run(lambda argv: (0, "{}"))
-        original = EX._run
-        EX._run = fake
+        original = EX._run_to_file
+        EX._run_to_file = fake
         try:
             EX.run_madge(Path(tempfile.mkdtemp()), ["a.js"],
                          {"available": True, "reason": None,
                           "bin": "/usr/local/bin/madge"})
         finally:
-            EX._run = original
+            EX._run_to_file = original
         self.assertEqual(calls[0][0], "/usr/local/bin/madge")
         self.assertNotIn("npx", calls[0])
 

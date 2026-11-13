@@ -85,6 +85,23 @@ def _run(argv, timeout=120, cwd=None):
         return None
 
 
+def _run_to_file(argv, timeout=120, cwd=None):
+    """Like `_run`, with stdout read from a temp file instead of a pipe.
+
+    Node tools exit before a pipe drains: on macOS madge's JSON stopped at
+    65536 bytes with exit code 0. A file receives the whole output.
+    """
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as out:
+        try:
+            proc = subprocess.run(argv, stdout=out, stderr=subprocess.PIPE,
+                                  text=True, timeout=timeout, cwd=cwd)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        out.seek(0)
+        proc.stdout = out.read()
+        return proc
+
+
 def probe(name):
     spec = TOOLS.get(name)
     if spec is None:
@@ -223,7 +240,7 @@ def run_madge(repo_root, relpaths, tool_state):
     # requires, so the union of the chunk graphs is the same graph.
     graph = {}
     for start in range(0, len(js), _ARG_CHUNK):
-        proc = _run(_npx_argv("madge", tool_state) + ["--json"]
+        proc = _run_to_file(_npx_argv("madge", tool_state) + ["--json"]
                     + js[start:start + _ARG_CHUNK], timeout=600, cwd=str(repo_root))
         if proc is None or proc.returncode != 0:
             return {"status": "not_measured", "reason": "madge failed",
