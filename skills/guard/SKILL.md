@@ -69,8 +69,8 @@ this check has no `ticket_refs` for its files and is not checked on them until t
 `update-baseline`.
 
 A file moved with `git mv` (or any move git itself recognises, `git diff -M`) keeps its old path's
-baseline: moving files is ordinary tidying, not new code. Moves are counted from the commit that
-last changed the baseline, so the file keeps it in later commits too, until `update-baseline`
+baseline: moving files is ordinary tidying, not new code. Moves are counted from the commit the
+baseline was written at, so the file keeps it in later commits too, until `update-baseline`
 records the new path. A file that git does not see as moved —
 rewritten past half its content on the way — is a new path and faces `warn`.
 
@@ -207,9 +207,11 @@ same change the hook rejects at commit time. `--accept-worse` writes it anyway; 
 the user explicitly decided to raise the bar for those entities, never on your own to get a commit
 through. The hook rejects that baseline too, so the person commits it themselves with
 `git commit --no-verify`, and the CI check of section 7 fails on it in the pull request, where the
-reviewer sees what was raised. Files that the guard measures for the first time after an upgrade
-(`.vue`, `.svelte`, `.sql`, `.sh`) are not "raised": the first `update-baseline` records them
-without `--accept-worse`.
+reviewer sees what was raised. What the guard measures for the first time after an upgrade —
+`.vue`, `.svelte`, `.sql`, `.sh` files that were already in the repository, and an existing
+`# NOQA` in capitals — is not "raised": the first `update-baseline` records it without
+`--accept-worse`. Run it right after replacing `guard.py`: until then a commit that touches such a
+file is judged by the old baseline.
 
 `update-baseline` is **never** run as part of `/code-health:fix`. It is a separate, deliberate act
 taken after a real improvement lands, not an automatic step in the fix cycle and not an escape hatch
@@ -241,8 +243,9 @@ git show origin/main:.code-health/guard.py | python - --base origin/main
 `--base REF` checks every file changed since the merge base with `REF` and compares the branch's
 baseline and config with the merge base's, so a branch that grew code past the ceiling, or moved
 the bar, fails there, and what `REF` did after the branch left it does not count. The script is
-taken from `REF`, so the branch cannot change the check that judges it. The CI checkout needs the
-history down to the merge base (for example `fetch-depth: 0`); without it the script exits 2.
+taken from `REF`, so the branch cannot change the check that judges it. The CI checkout needs full
+history (`fetch-depth: 0`): without the merge base the script exits 2, and without the commit the
+baseline was written at it does not see moved files.
 When proposing this job, show it and let the user add it; `install` does not write CI files.
 
 ## 8. Never move the baseline to escape a failing commit
@@ -257,7 +260,8 @@ versions at `HEAD` (at the merge base with `REF` with `--base`) and rejects the 
 raise any ceiling:
 
 - a baseline value that grew to or past `warn`, or a new entity granted at or above `warn`;
-- a `ticket_refs` or `suppressions` value removed from a file's record, which stops that check;
+- a `ticket_refs` or `suppressions` value removed from a file's record, or a new record without
+  them, which stops that check for the file;
 - a loosened threshold, a larger `chars_per_token`, a new `exclude` or `ticket_ref_ignore` entry;
 - a lower `schema`, or a deleted baseline.
 

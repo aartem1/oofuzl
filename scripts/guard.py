@@ -884,7 +884,7 @@ def report_baseline_moves(previous, current, moves):
               "  improvement, never to get past a failing commit.")
 
 
-def loosening(ref_cfg, ref_base, cfg, base, renames=None):
+def loosening(ref_cfg, ref_base, cfg, base, renames=None, existed=None):
     """How the working tree's config and baseline raise ceilings compared
     with a reference commit's: one line per change, empty when none.
 
@@ -917,7 +917,7 @@ def loosening(ref_cfg, ref_base, cfg, base, renames=None):
     if _number(was_schema) and _number(schema) and schema < was_schema:
         # An older schema switches `compare` to looser matching.
         out.append("baseline schema lowered %s -> %s" % (was_schema, schema))
-    out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames))
+    out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames, existed))
     return out
 
 
@@ -929,19 +929,26 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _raised_ceilings(ref_base, base, thresholds, renames=None):
+def _raised_ceilings(ref_base, base, thresholds, renames=None, existed=None):
     """Every baseline value whose ceiling (`ceiling`) is higher than the
     reference baseline grants. A value that moved below `warn` changes no
-    ceiling and is not listed."""
+    ceiling and is not listed.
+
+    `existed(path)` says whether `path` is in the reference commit's tree;
+    it is asked only about the first schema-3 baseline after an upgrade.
+    """
     schema = ref_base.get("schema") or 1
     legacy = schema < 2
+    # The first baseline written by a guard that measures FILE_ONLY_EXT
+    # files and counts `# NOQA`: what was already in the code then is
+    # recorded as it is, not counted as raised.
+    upgrade = schema < 3 and _number(base.get("schema")) and base["schema"] >= 3
     old_files = ref_base.get("files") or {}
     out = []
     for path, current in sorted((base.get("files") or {}).items()):
         old = _base_entry(old_files, path, renames)
-        if old is None and schema < 3 and Path(path).suffix in FILE_ONLY_EXT:
-            # The first baseline after the upgrade that measures these
-            # files: they were there before, only not counted.
+        if (old is None and upgrade and Path(path).suffix in FILE_ONLY_EXT
+                and existed is not None and existed((renames or {}).get(path, path))):
             continue
         funcs = current.get("functions") or {}
         matched = _matched_baselines(funcs, (old or {}).get("functions") or {}, legacy)
@@ -951,10 +958,14 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None):
         for entity, checks, values, before in entities:
             for label, key, tkey in checks:
                 value, was = values.get(key), before.get(key)
-                if value is None and was is not None and tkey in _FIXED_WARN:
+                if (value is None and tkey in _FIXED_WARN and entity is None
+                        and (was is not None or (old is None and _has_comment_reader(path)))):
                     # `compare` reads a missing value as "predates the
                     # metric" and stops checking it for this file.
-                    out.append("%-44s %-22s %s -> removed" % (path, label, was))
+                    out.append("%-44s %-22s %s -> missing"
+                               % (path, label, "new" if was is None else was))
+                    continue
+                if upgrade and key == "suppressions" and old is not None:
                     continue
                 # A file whose old record lacks a metric predates it, the
                 # same rule `compare` applies.
@@ -966,6 +977,10 @@ def _raised_ceilings(ref_base, base, thresholds, renames=None):
                     out.append("%-44s %-22s %s -> %s"
                                % (where, label, "new" if was is None else was, value))
     return out
+
+
+def _has_comment_reader(path):
+    return Path(path).suffix == ".py" or Path(path).suffix in BRACE_EXT
 
 
 def report_loosening(ref, lines):
@@ -997,7 +1012,8 @@ def write_baseline(repo_root, target, settings, accept_worse=False):
     # The same rule the hook applies to the committed result: refusing here
     # is earlier and says why.
     raised = (_raised_ceilings(outgoing, document, thresholds,
-                               _renames(repo_root, [_baseline_commit(repo_root, "HEAD")]))
+                               _renames(repo_root, [_anchor(repo_root, outgoing, "HEAD")]),
+                               lambda p: _exists_at(repo_root, "HEAD", p))
               if outgoing else [])
     if raised and not accept_worse:
         print("code-health guard: the new baseline would raise %d ceiling(s); nothing written\n"
@@ -1051,17 +1067,18 @@ def main(argv=None):
             return 2
     baseline_path = repo_root / BASELINE_RELPATH
     baseline = load_json(baseline_path, {"files": {}}) if baseline_path.exists() else None
-    # Moves since the baseline was committed, up to what is checked: the
-    # staged tree in the hook (pre-commit has stashed the rest), the working
-    # tree in `--check`, the branch tip with `--base`.
+    ref_base = _ref_json(repo_root, ref, BASELINE_RELPATH)
+    # Moves since the reference baseline was written, up to what is
+    # checked: the staged tree in the hook (pre-commit has stashed the
+    # rest), the working tree in `--check`, the branch tip with `--base`.
     renames = {}
     if baseline is not None:
-        since = _baseline_commit(repo_root, ref)
+        since = _anchor(repo_root, ref_base or baseline, ref)
         renames = _renames(repo_root, [since, "HEAD"] if args.base
                            else [since] if args.check else ["--cached", since])
-    loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH),
-                      _ref_json(repo_root, ref, BASELINE_RELPATH),
-                      load_json(repo_root / CONFIG_RELPATH, {}), baseline, renames)
+    loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH), ref_base,
+                      load_json(repo_root / CONFIG_RELPATH, {}), baseline, renames,
+                      lambda p: _exists_at(repo_root, ref, p))
     if loose:
         report_loosening(ref, loose)
         return 1
@@ -1149,6 +1166,20 @@ def _merge_base(repo_root, ref):
     out = subprocess.run(["git", "-C", str(repo_root), "merge-base", ref, "HEAD"],
                          capture_output=True, text=True)
     return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def _anchor(repo_root, doc, ref):
+    """The commit whose tree the paths in baseline `doc` describe: the
+    `head` it was written at, else the last commit that changed it."""
+    head = doc.get("head") if isinstance(doc, dict) else None
+    if isinstance(head, str) and head and _is_commit(repo_root, head):
+        return head
+    return _baseline_commit(repo_root, ref)
+
+
+def _exists_at(repo_root, ref, relpath):
+    return subprocess.run(["git", "-C", str(repo_root), "cat-file", "-e",
+                           "%s:%s" % (ref, relpath)], capture_output=True).returncode == 0
 
 
 def _baseline_commit(repo_root, ref):

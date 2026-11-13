@@ -661,6 +661,51 @@ class LooseningTests(unittest.TestCase):
         out = run_guard(".code-health/baseline.json", cwd=self.root)
         self.assertEqual(out.returncode, 0, out.stdout)
 
+    def test_a_new_record_without_the_comment_checks_is_a_loosening(self):
+        # A hand-written record for a new file, without `suppressions`,
+        # switched the check off for that file from then on.
+        (self.root / "n.py").write_text("import os  # noqa\n" * 5, encoding="utf-8")
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}},
+                       "n.py": {"lines": 5, "tokens": 50, "functions": {}}})
+        self.git("add", "-A")
+        out = run_guard("n.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_a_new_script_cannot_ride_the_upgrade_exemption(self):
+        self.write("new.sh", 2000)
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}},
+                       "new.sh": {"lines": 99999, "tokens": 999999, "functions": {}}})
+        self.git("add", "-A")
+        out = run_guard("new.sh", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_an_uppercase_noqa_recorded_as_zero_does_not_block_the_upgrade(self):
+        (self.root / "u.py").write_text("import os  # NOQA\n", encoding="utf-8")
+        self.baseline({"a.py": {"lines": 900, "tokens": 5000, "functions": {}},
+                       "u.py": {"lines": 1, "tokens": 5, "ticket_refs": 0,
+                                "suppressions": 0, "functions": {}}})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "old guard")
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.git("add", "-A")
+        out = run_guard(".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_a_move_committed_with_the_baseline_update_keeps_the_baseline(self):
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        (self.root / "pkg").mkdir()
+        self.git("mv", "a.py", "pkg/a.py")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "baseline, then move")
+        self.write("pkg/a.py", 890)
+        self.git("add", "-A")
+        out = run_guard("pkg/a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_base_mode_catches_what_a_skipped_hook_let_through(self):
         # `git commit --no-verify` skips the hook; a check against the main
         # branch, run on the server, is where that surfaces.
