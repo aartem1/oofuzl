@@ -522,6 +522,31 @@ class LooseningTests(unittest.TestCase):
         out = run_guard("big.py", ".code-health/baseline.json", cwd=root)
         self.assertEqual(out.returncode, 0, out.stdout)
 
+    def test_a_moved_file_keeps_its_baseline(self):
+        # `git mv` of an old 900-line file was rejected as a new file facing
+        # warn 400, though moving files is ordinary tidying.
+        (self.root / "pkg").mkdir()
+        self.git("mv", "a.py", "pkg/a.py")
+        out = run_guard("pkg/a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.write("pkg/a.py", 950)
+        self.git("add", "-A")
+        out = run_guard("pkg/a.py", cwd=self.root)
+        self.assertEqual(out.returncode, 1, out.stdout)
+
+    def test_a_baseline_rewritten_after_a_move_is_not_a_loosening(self):
+        (self.root / "pkg").mkdir()
+        self.git("mv", "a.py", "pkg/a.py")
+        target = self.root / ".code-health" / "baseline.json"
+        out = run_guard("--baseline", str(target), "--repo", str(self.root))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.git("add", "-A")
+        out = run_guard("pkg/a.py", ".code-health/baseline.json", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.git("commit", "-q", "-m", "move")
+        out = run_guard("--base", "main~1", cwd=self.root)
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_base_mode_catches_what_a_skipped_hook_let_through(self):
         # `git commit --no-verify` skips the hook; a check against the main
         # branch, run on the server, is where that surfaces.

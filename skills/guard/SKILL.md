@@ -66,9 +66,11 @@ a bare key such as `ABC-123`, and an old file may keep the ones it had but not a
 the audit's `ticket_ref` class — keys in a URL or on a `TODO` line, standards like `UTF-8`, and
 prefixes in config `ticket_ref_ignore` (case-sensitive) do not count. A baseline written before
 this check has no `ticket_refs` for its files and is not checked on them until the next
-`update-baseline`. A renamed or moved file is a new path: if it carries a key, the commit fails.
-Rewrite the key into the reason it stood for, or run `update-baseline` when the move is the whole
-change.
+`update-baseline`.
+
+A file moved with `git mv` (or any move git itself recognises, `git diff -M`) keeps its old path's
+baseline: moving files is ordinary tidying, not new code. A file that git does not see as moved —
+rewritten past half its content on the way — is a new path and faces `warn`.
 
 **Linter suppressions** (`suppressions`) follow the same rule with `warn` fixed at `1`: comment lines
 with `noqa`, `type: ignore`, `pylint: disable`, `pyright: ignore`, `eslint-disable…`, `@ts-ignore`,

@@ -662,16 +662,26 @@ def ceiling(baseline_value, warn):
     return max(baseline_value + 1, warn)
 
 
-def compare(measured, baseline, thresholds):
+def _base_entry(base_files, path, renames):
+    """The baseline record for `path`, or for the path git says it was
+    moved from: a moved file keeps what it was granted."""
+    entry = base_files.get(path)
+    if entry is None and renames and path in renames:
+        entry = base_files.get(renames[path])
+    return entry
+
+
+def compare(measured, baseline, thresholds, renames=None):
     violations = []
     base_files = baseline.get("files", {})
     # Schema 1 keyed Python methods by lizard's bare name (`__init__#2`);
     # matching on the last dotted part on both sides reads it unchanged.
     legacy = (baseline.get("schema") or 1) < 2
     for path, current in sorted(measured.items()):
-        base = base_files.get(path, {})
+        entry = _base_entry(base_files, path, renames)
+        base = entry or {}
         for key in ("ticket_refs", "suppressions"):
-            if path in base_files and base.get(key) is None:
+            if entry is not None and base.get(key) is None:
                 # A baseline written before this metric existed, or on a
                 # Python that could not parse the file, grants nothing and
                 # forbids nothing for it until `update-baseline`.
@@ -861,7 +871,7 @@ def report_baseline_moves(previous, current, moves):
               "  improvement, never to get past a failing commit.")
 
 
-def loosening(ref_cfg, ref_base, cfg, base):
+def loosening(ref_cfg, ref_base, cfg, base, renames=None):
     """How the working tree's config and baseline raise ceilings compared
     with a reference commit's: one line per change, empty when none.
 
@@ -890,7 +900,7 @@ def loosening(ref_cfg, ref_base, cfg, base):
     now = cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN)
     if _number(was) and _number(now) and now > was:
         out.append("chars_per_token raised %s -> %s (fewer tokens counted)" % (was, now))
-    out.extend(_raised_ceilings(ref_base, base, ref_thresholds))
+    out.extend(_raised_ceilings(ref_base, base, ref_thresholds, renames))
     return out
 
 
@@ -902,7 +912,7 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _raised_ceilings(ref_base, base, thresholds):
+def _raised_ceilings(ref_base, base, thresholds, renames=None):
     """Every baseline value whose ceiling (`ceiling`) is higher than the
     reference baseline grants. A value that moved below `warn` changes no
     ceiling and is not listed."""
@@ -910,7 +920,7 @@ def _raised_ceilings(ref_base, base, thresholds):
     old_files = ref_base.get("files") or {}
     out = []
     for path, current in sorted((base.get("files") or {}).items()):
-        old = old_files.get(path)
+        old = _base_entry(old_files, path, renames)
         funcs = current.get("functions") or {}
         matched = _matched_baselines(funcs, (old or {}).get("functions") or {}, legacy)
         entities = [(None, _FILE_CHECKS, current, old or {})]
@@ -959,7 +969,8 @@ def write_baseline(repo_root, target, settings, accept_worse=False):
                 "thresholds": thresholds, "files": files}
     # The same rule the hook applies to the committed result: refusing here
     # is earlier and says why.
-    raised = _raised_ceilings(outgoing, document, thresholds) if outgoing else []
+    raised = (_raised_ceilings(outgoing, document, thresholds, _renames(repo_root, ["HEAD"]))
+              if outgoing else [])
     if raised and not accept_worse:
         print("code-health guard: the new baseline would raise %d ceiling(s); nothing written\n"
               % len(raised))
@@ -1004,9 +1015,14 @@ def main(argv=None):
     ref = args.base or "HEAD"
     baseline_path = repo_root / BASELINE_RELPATH
     baseline = load_json(baseline_path, {"files": {}}) if baseline_path.exists() else None
+    # Moves since `ref`: staged ones in the hook (pre-commit has stashed
+    # the rest), the working tree in `--check`, the branch with `--base`.
+    renames = (_renames(repo_root, ["%s...HEAD" % args.base]) if args.base
+               else _renames(repo_root, ["HEAD"] if args.check else ["--cached", "HEAD"])
+               if baseline is not None else {})
     loose = loosening(_ref_json(repo_root, ref, CONFIG_RELPATH),
                       _ref_json(repo_root, ref, BASELINE_RELPATH),
-                      load_json(repo_root / CONFIG_RELPATH, {}), baseline)
+                      load_json(repo_root / CONFIG_RELPATH, {}), baseline, renames)
     if loose:
         report_loosening(ref, loose)
         return 1
@@ -1035,7 +1051,7 @@ def main(argv=None):
     measured, had_lizard = measure(repo_root, targets, chars_per_token, ticket_ignore)
     if not had_lizard:
         print("code-health guard: lizard unavailable; file sizes checked only")
-    violations = compare(measured, baseline, thresholds)
+    violations = compare(measured, baseline, thresholds, renames)
     if not violations:
         return 0
     if not args.check:
@@ -1098,6 +1114,18 @@ def _ref_json(repo_root, ref, relpath):
         return json.loads(text)
     except ValueError:
         return {}
+
+
+def _renames(repo_root, diff_args):
+    """`{new path: old path}` for files git sees as moved (`git diff -M`)."""
+    out = subprocess.run(["git", "-C", str(repo_root), "diff", "-M", "--name-status",
+                          "--diff-filter=R", "-z"] + diff_args, capture_output=True)
+    if out.returncode != 0:
+        return {}
+    fields = out.stdout.decode("utf-8", "replace").split("\0")
+    # -z: "R<score>", old, new, repeated.
+    return {fields[i + 2]: fields[i + 1] for i in range(0, len(fields) - 2, 3)
+            if fields[i].startswith("R")}
 
 
 def _changed_since(repo_root, ref):

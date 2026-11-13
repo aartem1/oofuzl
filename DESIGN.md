@@ -1075,9 +1075,8 @@ check existed has no `ticket_refs` for the file; that grants nothing and forbids
 `update-baseline` records it, so upgrading the vendored guard never fails a commit on untouched
 keys. `null` (a language with no comment reader, Python that does not parse) is never checked,
 on either side: a baseline that recorded `null` grants and forbids nothing, like a missing key. A
-renamed file is a new path and faces `warn` 1, so moving a file that carries a key fails until the
-key is rewritten or the baseline is updated — the same rule as for size, felt more often here
-because the fixed `warn` is low.
+file moved in a way git recognises (`git diff -M`) keeps its old path's baseline, for this check
+and for size alike; a file rewritten on the way is a new path and faces `warn` 1.
 `guard.py` cannot import `code_health`, so the comment reader and detector are copied into it and
 pinned to the originals by `tests/test_parser_agreement.py`.
 
@@ -1093,7 +1092,7 @@ files changed since the merge base with `REF`, judged against `REF`'s baseline a
 
 Performance budget: ≤2 s for 20 changed files. Measured on the calibration machine:
 `lizard -ENS --csv` over 20 files totalling 72,900 lines takes 0.57 s. `guard.py` in the hook path
-does one lizard subprocess, one JSON read, two `git show HEAD:` reads and no network.
+does one lizard subprocess, one JSON read, two `git show HEAD:` reads, one `git diff -M` for moved files and no network.
 
 ### One measurement path, one lizard version
 
