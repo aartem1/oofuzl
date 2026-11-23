@@ -129,6 +129,11 @@ class FakeMachine:
         if sub == "rm":
             self.containers.pop(argv[-1], None)
             return 0, argv[-1], ""
+        if sub == "tag":
+            if argv[2] not in self.images and not argv[2].startswith("sha:"):
+                return 1, "", "no such image"
+            self.images[argv[3]] = self.images.get(argv[2], argv[2])
+            return 0, "", ""
         if sub == "volume":
             return 1, "", "no such volume"
         if sub == "run":
@@ -524,6 +529,70 @@ class RecoveryTests(Base):
             fcntl.flock(held, fcntl.LOCK_EX)
             stop = self.stops(FakeMachine(containers=ours()))
         self.assertIn("другой", stop.reason)
+
+
+class RecoveryEdgeTests(Base):
+    def failed_restore(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True,
+                        restore_fails=True)
+        with self.assertRaises(SR.NotReady):
+            self.ready(m)
+        return m
+
+    def test_after_a_manual_restore_the_failed_version_is_not_started_again(self):
+        m = self.failed_restore()
+        # the user follows the fix: restores by hand and removes the marker
+        m.restore_fails, m.schema = False, "sha:old"
+        (self.conf / SR.MARKER).unlink()
+        result = self.ready(m)
+        self.assertEqual(m.containers[SR.NAME]["ImageId"], "sha:old")
+        self.assertEqual(result["status"], "ready")
+
+    def test_rollback_without_the_previous_image_stops_with_its_own_reason(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True)
+        original = SR._await_up
+        calls = {"n": 0}
+
+        def killed(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise KeyboardInterrupt
+            return original(*args, **kwargs)
+        SR._await_up = killed
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.ready(m)
+        finally:
+            SR._await_up = original
+        m.images.pop(SR.ROLLBACK_TAG, None)  # `docker image rm` by the user
+        stop = self.stops(m)
+        self.assertIn("образ", stop.reason)
+        self.assertIn(SR.MARKER, stop.fix)
+
+    def test_an_upgrade_interrupted_before_the_new_server_answered_is_not_marked_failed(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new")
+        original = SR._remove_sonar
+        SR._remove_sonar = lambda env: (_ for _ in ()).throw(KeyboardInterrupt())
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.ready(m)
+        finally:
+            SR._remove_sonar = original
+        self.ready(m)  # rolls back
+        self.assertFalse((self.conf / SR.FAILED_IMAGE).exists())
+        result = self.ready(m)  # tries the upgrade again
+        self.assertIn("server_upgraded", result["actions"])
+
+    def test_broken_marker_stops_with_a_reason_not_a_traceback(self):
+        self.write_token()
+        self.conf.mkdir(parents=True, exist_ok=True)
+        for text in ("{", '{"phase": "upgrading"}'):
+            (self.conf / SR.MARKER).write_text(text)
+            stop = self.stops(FakeMachine(containers=ours()))
+            self.assertIn(SR.MARKER, stop.fix)
 
 
 class RemoteTests(Base):

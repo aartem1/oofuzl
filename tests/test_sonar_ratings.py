@@ -19,7 +19,8 @@ def issue(key, quality, severity, rule="python:S930", path="app/api.py", line=10
 
 
 class FakeApi:
-    def __init__(self, measures, issues=(), tree=None):
+    def __init__(self, measures, issues=(), tree=None, no_blocker=False):
+        self.no_blocker = no_blocker
         self.measures = measures
         self.issues = list(issues)
         self.tree = tree or {}
@@ -33,6 +34,8 @@ class FakeApi:
             assert params["p"] * params["ps"] <= 10000, "past the search limit"
             assert params["components"] == P and "componentKeys" not in params
             q, sev = params["impactSoftwareQualities"], params["impactSeverities"]
+            if self.no_blocker and sev == "BLOCKER":
+                raise RuntimeError("Sonar API /api/issues/search ответил 400")
             rows = [i for i in self.issues
                     if any(x["softwareQuality"] == q and x["severity"] == sev
                            for x in i["impacts"])]
@@ -94,6 +97,12 @@ class IssueRatingTests(unittest.TestCase):
         self.assertEqual([i["key"] for i in r["driven_by"]["issues"]], ["b1"])
         self.assertEqual(r["counts"]["LOW"], 10300)
         self.assertEqual(r["next"]["letter"], "B")
+
+    def test_server_without_blocker_severity_counts_it_as_zero(self):
+        # SonarQube 10.2-10.7 knows only HIGH, MEDIUM and LOW impacts.
+        api = FakeApi({}, [issue("h1", "RELIABILITY", "HIGH")], no_blocker=True)
+        r = rating(R.explain(api, P), "reliability")
+        self.assertEqual((r["computed_letter"], r["counts"]["BLOCKER"]), ("D", 0))
 
     def test_more_worst_issues_than_search_returns_is_marked_truncated(self):
         many = [issue("k%d" % i, "RELIABILITY", "BLOCKER") for i in range(10300)]

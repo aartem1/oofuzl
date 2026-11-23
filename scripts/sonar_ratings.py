@@ -101,7 +101,16 @@ def _total(body):
 def _counts(api, project, quality):
     # One cheap query per severity: the counts stay exact however many
     # issues the project has.
-    return {s: _total(_search(api, project, quality, s, 1, 1)) for s in SEVERITY_ORDER}
+    counts = {}
+    for severity in SEVERITY_ORDER:
+        try:
+            counts[severity] = _total(_search(api, project, quality, severity, 1, 1))
+        except RuntimeError:
+            # SonarQube 10.2-10.7 has no BLOCKER impact and answers 400.
+            if severity != "BLOCKER":
+                raise
+            counts[severity] = 0
+    return counts
 
 
 def _issues(api, project, quality, severity):
@@ -137,8 +146,8 @@ def explain_issue_rating(name, quality, measured_letter, counts, worst_issues, p
     out = {"rating": name, "letter": measured_letter or computed, "computed_letter": computed,
            "counts": {s: counts.get(s, 0) for s in SEVERITY_ORDER}}
     if measured_letter and measured_letter != computed:
-        out["mismatch"] = ("Sonar показывает %s, а открытые задачи дают %s: анализ устарел или "
-                           "часть задач вне выборки." % (measured_letter, computed))
+        out["mismatch"] = ("Sonar показывает %s, а открытые задачи дают %s: анализ устарел "
+                           "или задачи изменились после него." % (measured_letter, computed))
     if not present:
         out["driven_by"] = None
         out["next"] = None

@@ -33,8 +33,13 @@ measuring; do not repeat its steps by hand.
    the upgrade failed. A failed pull keeps the installed image. The upgrade state is written to
    `~/.config/code-health/upgrade.json` before the old server is removed: a run that died midway is
    rolled back by the next one; a failed restore stops every later run with the manual restore
-   command and starts no server over the unrestored database. An image that failed is not tried
-   again (`upgrade-failed-image`). A lock file serialises parallel runs.
+   command and starts no server over the unrestored database. The previous image is tagged
+   `sonarqube:code-health-rollback` before the upgrade, so `docker image prune` cannot take the
+   rollback target away; the tag is dropped after a successful upgrade. An image that started but
+   did not come up is not tried again (`upgrade-failed-image`; remove the file to retry); after a
+   manual restore the server starts on the previous image. An interrupted run marks nothing failed.
+   A damaged `upgrade.json` stops the run instead of being guessed at. A lock file serialises
+   parallel preparations; it does not cover the scan that follows.
 5. **Readiness.** `/api/system/status` must reach `UP` (300 s), otherwise stop with
    `docker logs --tail 200 <container>`.
 6. **Token** — below.
@@ -49,7 +54,9 @@ measuring; do not repeat its steps by hand.
 - Default URL: `http://localhost:9000`, unless an existing local instance uses another explicit URL.
 - Prefer `SONAR_HOST_URL` and `SONAR_TOKEN` environment variables.
 - Never put tokens in command history when a safer environment mechanism is available, and never write tokens into the audited repository.
-- `sonar_ready.py` looks for `SONAR_TOKEN`, then `~/.config/code-health/sonar-token`, then the
+- A server that is not on localhost is only checked: its token comes from `SONAR_TOKEN` alone, and
+  the local token files and admin password are never sent to it.
+- For the local server `sonar_ready.py` looks for `SONAR_TOKEN`, then `~/.config/code-health/sonar-token`, then the
   older `~/.config/sonar-code-health/token`, and validates each with `/api/authentication/validate`.
   When none is valid it mints one itself: on a fresh server it rotates `admin:admin` to a random
   password and generates a token; with a stored admin password it generates a token. Both files get

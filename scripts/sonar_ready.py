@@ -146,10 +146,13 @@ def _write_private(path, value):
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Written aside and renamed: a run killed midway never leaves half a file.
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(value + "\n")
-    os.chmod(path, 0o600)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
 
 
 def _read(path):
@@ -332,11 +335,15 @@ def _run_sonar(env, image, sonar_env):
     argv.append(image)
     code, _, err = env.run(argv)
     if code != 0:
-        if "port is already allocated" in err or "address already in use" in err:
-            raise NotReady("Порт 9000 занят другим процессом, SonarQube не запустить.",
-                           "lsof -nP -iTCP:9000 -sTCP:LISTEN  # освободите порт и повторите аудит")
+        _port_taken(err)
         raise NotReady("Не удалось создать контейнер SonarQube: %s" % err.strip(),
                        "docker logs --tail 200 %s" % NAME)
+
+
+def _port_taken(err):
+    if "port is already allocated" in err or "address already in use" in err:
+        raise NotReady("Порт 9000 занят другим процессом, SonarQube не запустить.",
+                       "lsof -nP -iTCP:9000 -sTCP:LISTEN  # освободите порт и повторите аудит")
 
 
 def _remove_sonar(env):
@@ -400,16 +407,27 @@ def _pull(env, notes, actions):
 # finished by the next one instead of being mistaken for a fresh start.
 MARKER = "upgrade.json"
 FAILED_IMAGE = "upgrade-failed-image"
+# The previous image is tagged before the upgrade: an untagged image ID can be
+# removed by `docker image prune`, and then there is nothing to roll back to.
+ROLLBACK_TAG = "sonarqube:code-health-rollback"
 RESTORE = ("dropdb -U sonar sonar && createdb -U sonar -O sonar sonar && "
            "pg_restore -U sonar -d sonar %s" % BACKUP_DUMP)
 
 
 def _marker(config_dir):
-    try:
-        value = json.loads((config_dir / MARKER).read_text())
-    except (OSError, ValueError):
+    path = config_dir / MARKER
+    if not path.exists():
         return None
-    return value if isinstance(value, dict) else None
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        value = None
+    if not isinstance(value, dict) or value.get("phase") not in ("upgrading", "restore_failed") \
+            or not value.get("old_image"):
+        raise NotReady("Файл состояния обновления SonarQube %s повреждён: непонятно, что "
+                       "откатывать." % path,
+                       "docker ps -a  # проверьте, что сервер и база на месте, затем: rm %s" % path)
+    return value
 
 
 def _set_marker(config_dir, value):
@@ -426,14 +444,22 @@ def _clear_marker(config_dir):
 def _dump(env):
     # Written aside and renamed on success: a dump that fails midway (a full
     # disk) never replaces the previous good copy.
-    tmp = BACKUP_DUMP + ".partial"
+    # The previous copy is kept as .prev: a dump taken from a database that
+    # has just been restored by hand does not erase the only good copy.
+    tmp, prev = BACKUP_DUMP + ".partial", BACKUP_DUMP + ".prev"
     return env.run(["docker", "exec", DB_NAME, "sh", "-c",
-                    "pg_dump -U sonar -Fc -f %s sonar && mv %s %s" % (tmp, tmp, BACKUP_DUMP)])[0] == 0
+                    "pg_dump -U sonar -Fc -f %s sonar && { [ ! -f %s ] || mv %s %s; } && mv %s %s"
+                    % (tmp, BACKUP_DUMP, BACKUP_DUMP, prev, tmp, BACKUP_DUMP)])[0] == 0
 
 
 def _rollback(env, host, wait, old_image, sonar_env, config_dir):
     """Restore the dump and bring the old image back. A failed restore is
     remembered: the next run starts nothing, so the copy survives."""
+    if not _image_id(env, old_image):
+        raise NotReady("Обновление SonarQube прервано, а образ прежней версии (%s) удалён: "
+                       "откатываться не на что. Копия базы цела." % old_image,
+                       "docker pull <прежняя версия sonarqube> && docker tag <она> %s  "
+                       "# либо верните базу вручную и удалите %s" % (old_image, config_dir / MARKER))
     _remove_sonar(env)
     if env.run(["docker", "exec", DB_NAME, "sh", "-c", RESTORE])[0] != 0:
         _set_marker(config_dir, {"phase": "restore_failed", "old_image": old_image})
@@ -455,23 +481,39 @@ def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, c
     that image is not tried again."""
     if _read(config_dir / FAILED_IMAGE) == new_image:
         notes.append("Новая версия SonarQube уже не поднималась на этой базе; обновление не "
-                     "повторяю, работаю на прежней.")
+                     "повторяю, работаю на прежней. Попробовать снова: rm %s"
+                     % (config_dir / FAILED_IMAGE))
+        return
+    if env.run(["docker", "tag", old_image, ROLLBACK_TAG])[0] != 0:
+        notes.append("Не удалось сохранить образ прежней версии SonarQube, обновление сервера "
+                     "пропущено.")
         return
     if not _dump(env):
         notes.append("Не удалось сохранить копию базы SonarQube, обновление сервера пропущено.")
         return
-    _set_marker(config_dir, {"phase": "upgrading", "old_image": old_image, "new_image": new_image})
+    _set_marker(config_dir, {"phase": "upgrading", "old_image": ROLLBACK_TAG,
+                             "new_image": new_image})
     try:
         _remove_sonar(env)
         _run_sonar(env, IMAGE, sonar_env)
+    except NotReady as failed:
+        # The new version never ran: it is not marked failed.
+        _rollback(env, host, wait, ROLLBACK_TAG, sonar_env, config_dir)
+        notes.append("Новую версию SonarQube не удалось запустить (%s); вернул прежнюю."
+                     % failed.reason)
+        return
+    try:
         migrated = _await_up(env, host, wait, NAME)
     except NotReady as failed:
-        _rollback(env, host, wait, old_image, sonar_env, config_dir)
+        # Written before the rollback: if the restore fails too, the next run
+        # after a manual restore still knows not to start this version.
         _write_private(config_dir / FAILED_IMAGE, new_image)
+        _rollback(env, host, wait, ROLLBACK_TAG, sonar_env, config_dir)
         notes.append("Новая версия SonarQube не поднялась (%s); вернул прежнюю с прежними данными."
                      % failed.reason)
         return
     _clear_marker(config_dir)
+    env.run(["docker", "image", "rm", ROLLBACK_TAG])
     actions.append("server_upgraded")
     if migrated:
         actions.append("db_migrated")
@@ -480,6 +522,7 @@ def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, c
 def _start(env, name, actions):
     code, _, err = env.run(["docker", "start", name])
     if code != 0:
+        _port_taken(err)
         raise NotReady("Контейнер %s не запускается: %s" % (name, err.strip()),
                        "docker logs --tail 200 %s" % name)
     actions.append("container_started")
@@ -524,9 +567,9 @@ def ensure_sonar(env, host, wait, actions, notes, config_dir, update=True):
     if marker and marker.get("phase") == "upgrading":
         # The previous run died between removing the old server and
         # confirming the new one: finish its rollback.
+        # Whether the new version failed is unknown (the run may have been
+        # killed before it started), so it is not marked failed.
         _rollback(env, host, wait, marker["old_image"], sonar_env, config_dir)
-        if marker.get("new_image"):
-            _write_private(config_dir / FAILED_IMAGE, marker["new_image"])
         notes.append("Прерванное прошлое обновление SonarQube откачено: вернул прежнюю версию и "
                      "базу из копии.")
         actions.append("upgrade_rolled_back")
@@ -538,7 +581,13 @@ def ensure_sonar(env, host, wait, actions, notes, config_dir, update=True):
         if any(r.get("Names") == DB_NAME for r in rows) and not _dump(env):
             raise NotReady("Не удалось сохранить копию базы SonarQube перед запуском сервера.",
                            "docker logs --tail 200 %s" % DB_NAME)
-        _run_sonar(env, IMAGE, sonar_env)
+        image = IMAGE
+        if image_id and _read(config_dir / FAILED_IMAGE) == image_id and _image_id(env, ROLLBACK_TAG):
+            # The base was restored by hand after a failed upgrade: start the
+            # version it belongs to, not the one that failed on it.
+            image = ROLLBACK_TAG
+            notes.append("Запускаю прежнюю версию SonarQube: новая на этой базе уже не поднималась.")
+        _run_sonar(env, image, sonar_env)
         actions.append("container_created")
     elif ours.get("State") != "running":
         _start(env, NAME, actions)
@@ -756,8 +805,8 @@ def main_with(env, argv):
                            sonar_wait=args.sonar_wait, environ=env.env,
                            scanner_cache=args.scanner_cache, update=not args.no_update)
     except OSError as exc:
-        stop = NotReady("Не удалось записать файл настроек: %s." % exc,
-                        "проверьте права на %s" % args.config_dir)
+        stop = NotReady("Ошибка файловой системы: %s." % exc,
+                        "проверьте место на диске и права на %s" % (exc.filename or args.config_dir))
         doc = {"status": "failed", "reason": stop.reason, "fix": stop.fix}
         err = "Sonar не готов, аудит остановлен: %s\nИсправить: %s\n" % (stop.reason, stop.fix)
         return 1, json.dumps(doc, ensure_ascii=False, indent=2), err
