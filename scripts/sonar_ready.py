@@ -485,12 +485,14 @@ def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, c
                      "повторяю, работаю на прежней. Попробовать снова: rm %s"
                      % (config_dir / FAILED_IMAGE))
         return
+    if not _dump(env):
+        notes.append("Не удалось сохранить копию базы SonarQube, обновление сервера пропущено.")
+        return
+    # The tag exists only while an upgrade is unfinished or failed: a missing
+    # server is then recreated on it (see ensure_sonar).
     if env.run(["docker", "tag", old_image, ROLLBACK_TAG])[0] != 0:
         notes.append("Не удалось сохранить образ прежней версии SonarQube, обновление сервера "
                      "пропущено.")
-        return
-    if not _dump(env):
-        notes.append("Не удалось сохранить копию базы SonarQube, обновление сервера пропущено.")
         return
     _set_marker(config_dir, {"phase": "upgrading", "old_image": ROLLBACK_TAG,
                              "new_image": new_image})
@@ -515,7 +517,11 @@ def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, c
                      % failed.reason)
         return
     _clear_marker(config_dir)
-    env.run(["docker", "image", "rm", ROLLBACK_TAG])
+    # -f untags even when a stopped container still uses the old image.
+    env.run(["docker", "image", "rm", "-f", ROLLBACK_TAG])
+    if _image_id(env, ROLLBACK_TAG):
+        notes.append("Не удалось снять тег %s: удалите его (docker image rm -f %s), иначе "
+                     "пересозданный сервер встанет на прежней версии." % (ROLLBACK_TAG, ROLLBACK_TAG))
     actions.append("server_upgraded")
     if migrated:
         actions.append("db_migrated")

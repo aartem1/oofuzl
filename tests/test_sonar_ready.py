@@ -105,6 +105,8 @@ class FakeMachine:
         if argv[1:3] == ["image", "inspect"]:
             ref = argv[-1]
             return (0, self.images[ref] + "\n", "") if ref in self.images else (1, "", "none")
+        if argv[1:3] == ["image", "rm"]:
+            return (0, "", "") if self.images.pop(argv[-1], None) else (1, "", "no such image")
         if argv[1:3] == ["network", "inspect"]:
             return (0, "[]", "") if argv[3] in self.networks else (1, "", "none")
         if argv[1:3] == ["network", "create"]:
@@ -641,6 +643,15 @@ class RecoveryEdgeTests(Base):
             SR._run_sonar = original
         self.assertEqual((m.restores, m.containers[SR.NAME]["ImageId"]), (0, "sha:old"))
         self.assertFalse((self.conf / SR.FAILED_IMAGE).exists())
+
+    def test_after_a_successful_upgrade_a_recreated_server_runs_the_new_version(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new")
+        self.assertIn("server_upgraded", self.ready(m)["actions"])
+        self.assertNotIn(SR.ROLLBACK_TAG, m.images)
+        m.containers.pop(SR.NAME)  # `docker rm` by the user
+        self.ready(m)
+        self.assertEqual(m.containers[SR.NAME]["ImageId"], "sha:new")
 
     def test_broken_marker_stops_with_a_reason_not_a_traceback(self):
         self.write_token()
