@@ -34,10 +34,15 @@ Codex reads the same repository through [`.agents/plugins/marketplace.json`](.ag
 ### `audit`
 
 - Runs local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import
-  cycles, dead code, churn, comment noise) plus an optional SonarQube layer, without changing the
-  repository.
-- Marks every layer that could not run as `not measured`, with a reason, instead of dropping it
-  silently — a Sonar-less audit says so rather than implying a clean bill of health.
+  cycles, dead code, churn, comment noise) plus SonarQube, without changing the repository.
+- Requires a working Sonar: starts Docker (macOS), creates or upgrades the local SonarQube
+  container, mints a token and fetches the scanner itself — and stops with the reason and one fix
+  command if any of that fails. Docker itself is never installed.
+- Brings lizard, jscpd, madge, vulture, the SonarQube image and the scanner to their latest stable
+  release, records exact versions, and says when a change since the last audit comes from a tool
+  upgrade rather than the code.
+- Explains every Sonar rating: the issues that set the letter, whether they are real or
+  misleading, and what moves it to the next letter; groups that raise a rating go first.
 - Writes a debt ledger, grouped and prioritized (`A1`, `A2`, …), that a `fix` session can resolve.
 
 ### `fix`
@@ -60,16 +65,14 @@ Codex reads the same repository through [`.agents/plugins/marketplace.json`](.ag
 
 | Layer | Tools | Produces | Used by |
 |---|---|---|---|
-| L1 Sonar | a dedicated quality profile forked from `Sonar way` | reliability, security, coverage, maintainability rating, cognitive complexity | `audit` only — **optional** |
+| L1 Sonar | a dedicated quality profile forked from `Sonar way` | reliability, security, coverage, maintainability rating, cognitive complexity | `audit` (required) and `fix` for rating groups |
 | L2 local | `lizard`, `jscpd`, `madge`, `vulture`, `git`, a Python AST pass, `tokenize` and a brace-comment scanner, direct file reads | size, token cost, cyclomatic complexity, parameters, nesting, exact and near-duplicate clones, import cycles, dead code, comment noise, churn | all three — **the only layer `guard` uses** |
 | L3 derived | this plugin's own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` only |
 
-**L1 is optional.** Without Docker, the Sonar layer reports `not measured` with a stated reason and
-the audit completes on local metrics alone. That has a real cost, stated rather than hidden:
-reliability, security, coverage, maintainability rating, and cognitive complexity are Sonar-only —
-nothing else in this plugin produces them. **A Sonar-less audit can therefore structurally never
-raise a P0**, because the P0 tier is defined by evidence only Sonar produces. The report says this
-plainly instead of implying the repository has no P0-level problems.
+**L1 is required for `audit`.** Reliability, security, coverage, maintainability rating and
+cognitive complexity come only from Sonar, and P0 is defined by that evidence, so an audit without
+it is not worth reading. `scripts/sonar_ready.py` brings Sonar up before anything is measured; if it
+cannot, the audit stops with the reason and one fix command. `guard` stays Sonar-free.
 
 **Nesting depth is measured for Python only.** The plugin computes it from the same AST pass that
 measures imports and symbols. For every other language nesting is reported as not measured:
@@ -99,11 +102,12 @@ per-run flag.
 |---|---|---|
 | `lizard` | size, complexity, parameters — the one hard requirement | installed automatically (`uv tool install` → `pipx` → a plugin-owned venv) |
 | `git` | churn, and every churn-derived metric | already present on essentially every target repository |
-| Docker + SonarQube | the L1 layer | `L1: not measured`, audit continues |
+| Docker | SonarQube, which `audit` requires | `audit` stops with an install hint; on macOS a stopped Docker Desktop is started automatically |
 | `pre-commit` | activating the `guard` hook | `guard install` reports and stops before writing anything |
 
 `jscpd`, `madge`, and `vulture` sharpen individual `audit` findings (exact clones, JS/TS import
-graphs, Python dead code) and are installed the same way as `lizard` when missing; their absence
+graphs, Python dead code) and are installed the same way as `lizard` when missing; every audit
+brings all of them to the latest stable release first (a failed update keeps the installed one); their absence
 narrows one finding, not the whole audit. Each run probes only the tools its requested layers can
 use. JS/TS dead code is reported as **not measured**: `knip` would be the tool for it, but this
 plugin has no verified parser for its output and says so rather than reporting a clean result it

@@ -24,7 +24,10 @@ the only skill in this plugin that writes code and commits.
 - Never use `NOSONAR`, ignore annotations/comments, exclusions, disabled rules, weaker quality
   profiles, raised thresholds, or test deletion as a shortcut. The one narrow exception (a
   demonstrated false positive with explicit per-occurrence user approval) is a stop-and-ask, never a
-  subagent's own call — see the anti-gaming check (step 4).
+  subagent's own call — see the anti-gaming check (step 4). A rating group whose ledger
+  remediation is a Sonar setting (one rule or profile setting, a sources/tests split, generated-code
+  scope, coverage report paths) may make exactly that change, with the reason written next to it;
+  that, too, is shown to the user before the commit.
 - Do not refactor unrelated code merely because it is nearby.
 - Do not reset, overwrite, stash, or discard pre-existing user changes.
 - Do not push.
@@ -157,6 +160,15 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
    baseline, never to this fix.
 5. **Re-measure this group's dimension again and run the anti-gaming check** (step 4 below),
    including comparing the repo-wide `summary` against `queue.baseline_summary` from step 2.
+5a. **A rating group re-checks its letter.** When the group carries `rating: {metric, from, to}`,
+   bring Sonar up with `python3 <plugin-root>/scripts/sonar_ready.py` (it stops the item with the
+   reason if Sonar cannot work — mark the item `failed`, end the cycle), run the analysis of the
+   working tree as the audit does (`<plugin-root>/references/sonar.md`; project key
+   `<project-key>:fix` so the main analysis history stays clean), then
+   `python3 <plugin-root>/scripts/sonar_ratings.py --project <project-key>:fix`. Record
+   `rating_before`/`rating_after` on the queue item and report them. A letter that did not reach
+   `to` is said plainly with the issues still in `driven_by`; it does not fail the item when the
+   group's own issues are gone.
 6. **Commit on a pass.** Stage only the exact paths the subagent touched for this group — never
    `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). This is the
    **backstop** for a path outside the group's declared file list — one item 0's comparison could
@@ -214,7 +226,9 @@ uncommitted, the item is marked `failed`, and the cycle stops (step 3, item 7).
 1. Test files deleted; test functions removed; `skip` / `xfail` / `.skip` / `.only` /
    `pytest.mark.skip` added; assertions weakened to tautologies.
 2. Any of `.code-health/config.json`, `.code-health/baseline.json`, `.code-health/guard.py`,
-   `.pre-commit-config.yaml`, `sonar-project.properties`, or a lint configuration modified. The
+   `.pre-commit-config.yaml`, `sonar-project.properties`, or a lint configuration modified — except
+   the one Sonar setting a rating group's remediation names (Hard rules), with its reason written
+   beside it and shown to the user. The
    ratchet's own machinery is included deliberately — otherwise a subagent could neuter the hook and
    still get its commit through. Moving the ratchet is `guard update-baseline`, a separate, explicit
    command outside this cycle.
@@ -295,7 +309,7 @@ plain language. Explain the method, not a file-by-file changelog.
 **Как проверено** — short bullets naming the checks that actually ran: the narrow safety baseline,
 the escalation ladder up to the gate, the anti-gaming check, and the gate's own before/after result
 for each group. State explicitly whether the group's finding disappeared and whether the gate ended
-green or red.
+green or red. For a rating group, the rating before and after («надёжность E → D»).
 
 **Осталось** — material residual risk, validation gaps, pre-existing failures, groups still
 `pending` in the queue, and any item stopped for escalation or a red gate. Omit this section only

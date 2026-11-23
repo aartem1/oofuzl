@@ -1,15 +1,17 @@
 ---
 name: audit
-description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn, comment noise) plus an optional SonarQube layer, mark every unavailable layer as not measured rather than silently dropping it, and write a debt ledger a fix session can resolve.
-compatibility: Requires local shell access. lizard is installed automatically; Docker is optional and only enables the Sonar layer. Designed for Claude Code and Codex-compatible Agent Skills.
+description: Measure repository code health for AI-agent work and return a compact prioritized report. Run local metrics (size, tokens, complexity, parameters, nesting, near-duplicates, import cycles, dead code, churn, comment noise) plus SonarQube, which is required: Docker and the SonarQube container are brought up first and the audit stops if Sonar cannot be made to work. Explains every Sonar rating and how to raise it honestly, and writes a debt ledger a fix session can resolve.
+compatibility: Requires local shell access and an installed Docker (started automatically on macOS, never installed). lizard, jscpd, madge, vulture, the SonarQube image and the scanner are brought to their latest stable release automatically. Designed for Claude Code and Codex-compatible Agent Skills.
 ---
 
 # Code Health Audit
 
 Audit the target repository without changing its source, tests, build files, ignore files, or
-Sonar/quality configuration. `scripts/measure.py` (local, always available) is the baseline of
-every audit; SonarQube layers on top of it when reachable and is never required to produce a
-useful report.
+Sonar/quality configuration. Two sources make one report: `scripts/measure.py` (local metrics) and
+SonarQube (reliability, security, coverage, maintainability). **Sonar is a precondition, not an
+optional layer:** an audit without it is not worth reading, so the audit brings Sonar up first and
+stops — with the reason and the one command that fixes it — if it cannot. There is no partial
+report and no `not measured` for a Sonar row.
 
 Use the repository/path supplied by the user. Otherwise use the current Git repository.
 
@@ -26,21 +28,22 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
 - Preserve any pre-existing working-tree changes. Record `git status` before analysis and verify
   tracked/staged state is unchanged afterward. Never reset or stash user work automatically.
 - Local measurement-tool provisioning (`lizard`, `jscpd`, `madge`, `vulture`) is **automatic**, via
-  `measure.py --install-missing` — no per-tool prompt. Report what it installed; see step 2.
+  `measure.py --update-tools`, which also brings each one to its latest stable release — no
+  per-tool prompt. Report what it installed or upgraded; see step 3.
   `measure.py` probes only the tools the requested layers can actually use, so the `tools` block
   lists those and no others; a tool missing from the block was not needed, not silently skipped.
   `knip` is not among them: JS/TS dead code is `not_measured` because its output is not parsed
   (`<plugin-root>/references/tools.md`).
-- Creating or starting the local SonarQube container is a **different, permission-gated** action:
-  it is a persistent Docker artifact, not a project-scoped `npx`/`uv tool` install. If no usable
-  container exists, ask once whether to install/create one before pulling images or creating it.
-- If Docker itself is unavailable or unhealthy, do not install a container runtime implicitly.
-  Report that concisely, mark `L1: not_measured` with the reason, and continue the audit on L2/L3
-  alone — a missing or unhealthy Docker stops the Sonar layer, never the whole audit.
+- Starting Docker, pulling the SonarQube image and creating/starting/upgrading its container are
+  part of running the audit — no separate permission step (`scripts/sonar_ready.py`, step 2).
+  Installing Docker or any other runtime is never done: a missing Docker stops the audit with a
+  one-line instruction.
+- Any Sonar step that fails stops the audit: say the reason and the one command that fixes it, and
+  produce no report. Never fall back to a Sonar-less audit, never mark a Sonar row `not measured`.
 - Audit may write to the **Sonar server** (create the project, create/reconcile the quality
-  profile) but never to the target repository. Disclose and confirm this once per server before
-  the first write; later audits against the same server reconcile silently unless an actual write
-  happens, which is then announced in the report (see step 10).
+  profile) but never to the target repository. On the local server `sonar_ready.py` brought up this
+  needs no confirmation; on any other server (a `SONAR_HOST_URL` that is not `localhost`) disclose
+  and confirm once before the first write. Every actual write is announced in the report (step 10).
 
 ## 1. Resolve scope and baseline
 
@@ -56,14 +59,45 @@ Use the repository/path supplied by the user. Otherwise use the current Git repo
    Record that path as the ledger's `repo_path`. Never require a project config file in the target repository (`.code-health/config.json`
    is optional and, when present, only overrides thresholds/excludes — see DESIGN §6).
 
-## 2. Run the local measurer — always, first
+## 2. Bring Sonar up — before any measuring
 
-`measure.py` is the L2+L3 baseline. Run it unconditionally, before touching Sonar, writing its
+```bash
+python3 <plugin-root>/scripts/sonar_ready.py --scanner-cache "${XDG_CACHE_HOME:-$HOME/.cache}/code-health/sonar-scanner" \
+  > <tmp>/sonar.json
+```
+
+It does, in order, and prints one JSON document without secrets:
+
+1. Docker: no `docker` CLI — stop (it never installs Docker). Daemon not answering — on macOS
+   `open -a Docker` and a bounded wait (180 s); elsewhere stop with the start command.
+2. SonarQube: pulls the newest `sonarqube:community`; reuses a healthy container (any name),
+   starts a stopped one, otherwise creates one with the persistent volumes
+   `sonarqube_data|extensions|logs`; waits for `UP` (300 s). A container on an older image is
+   recreated on the new one with the same volumes after copying the data volume; the database
+   migration runs when the server asks for it, and a failed migration restores the copy and the
+   previous version. A failed pull keeps the installed version.
+3. Token: `SONAR_TOKEN`, else `~/.config/code-health/sonar-token`, else the older
+   `~/.config/sonar-code-health/token`, each checked against the server. None valid — a fresh server
+   (`admin:admin`) gets a random admin password and a new token, both saved with mode 600 under
+   `~/.config/code-health/`; a stored admin password mints a new token.
+4. Scanner: the newest native SonarScanner CLI for this platform, cached outside any repository.
+
+Exit 0: keep `host`, `container`, `version`, `token_file` (null when the token came from
+`SONAR_TOKEN`), `scanner`, `scanner_version`, `actions`, `notes`. Use the token only as
+`SONAR_TOKEN="$(cat <token_file>)"` inside a command — never print it. Report `actions` (Docker
+started, server upgraded, token minted) and every line of `notes` in the provisioning line.
+
+Exit 1: the stderr already says «Sonar не готов, аудит остановлен: …» and «Исправить: …». Relay
+those two lines to the user and stop — no measuring, no report, no ledger write.
+
+## 3. Run the local measurer
+
+`measure.py` is the L2+L3 baseline. Run it after step 2, writing its
 output somewhere **outside the target repository** (a fresh `mktemp -d`, never a path inside the
 repo even if gitignored):
 
 ```bash
-python3 <plugin-root>/scripts/measure.py --repo <repo> --install-missing --out <tmp>/measure.json \
+python3 <plugin-root>/scripts/measure.py --repo <repo> --update-tools --out <tmp>/measure.json \
   --brief 10 --history "${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.history.jsonl"
 ```
 
@@ -79,49 +113,18 @@ Read that first; open `<tmp>/measure.json` for the rest of a kind only when grou
   and every layer is `not_measured`. Findings never change the exit code. A non-zero exit is a
   usage error (bad `--repo`, unreadable config) — fix the invocation, do not read it as "the
   repository is unhealthy" or as an audit finding.
-- Read the document's `tools` block and report it as **one line**: every tool with
-  `available: true, installed_by_us: true` goes under "Installed for this audit"; every tool with
-  `available: true, installed_by_us: false` goes under "Already present". For example:
-  `Installed for this audit: jscpd@5.4.1, madge@8.0.0. Already present: lizard 1.23.0, vulture 2.16.`
+- Read the document's `tools` block and report it as **one line** with exact versions: what was
+  installed or upgraded for this audit (`updated: true`, with `previous_version → version`), what
+  was already current, and one short clause per `update_error` (the installed version was kept).
+  Add the SonarQube server and scanner versions from step 2. For example:
+  `Инструменты: lizard 1.17.10 → 1.18.0, jscpd 5.4.1 (актуальная), SonarQube 26.8, сканер 8.1.0.5000; vulture не обновился (PyPI недоступен), остался 2.16.`
   A tool that stayed `available: false` is not part of this line — its absence is carried instead
-  by that layer's own `status`/`reason` (step 3, step 10).
+  by that layer's own `status`/`reason` (step 10).
+- When `--brief` reports tool versions that changed since the previous audit, the «what changed»
+  sentence names them for the rows they feed, so a tool upgrade is not read as the code getting
+  better or worse.
 - Keep the parsed `layers` and `findings` from this document; they feed grouping (step 7) and the
-  report (step 10) regardless of whether Sonar ends up available.
-
-## 3. Layer Sonar on top, when reachable
-
-Follow `<plugin-root>/references/sonar.md`.
-
-- Reuse a healthy existing SonarQube Community Build container when possible, even if its name
-  differs. Start a stopped compatible container rather than creating another one.
-- If none exists, ask once whether to install/create the local Community Build (see hard rules
-  above). On approval, use persistent Docker volumes so later audits are cheap and state survives
-  restarts.
-- Wait for SonarQube to report a healthy/up state before analysis.
-- If authentication is not configured, guide the user through the smallest one-time setup. Prefer a
-  user token exposed through `SONAR_TOKEN`; never write it into the repository.
-- If Docker is unavailable/unhealthy, or the user declines installation, or setup otherwise fails:
-  set `L1: not_measured` with the reason and move straight to step 7. Do not retry indefinitely and
-  do not block the rest of the audit on this layer.
-
-### What is lost without L1
-
-State this table in the report whenever `L1: not_measured` or `partial`, rather than letting the
-missing rows imply the repository has no issues there:
-
-| Scorecard row | Without Sonar |
-|---|---|
-| Reliability | `not measured` |
-| Security + hotspots | `not measured` |
-| Coverage | `not measured` (never `0 %`) |
-| Maintainability rating / debt | `not measured` |
-| Cognitive complexity | `not measured`; CCN (from L2 `lizard`) reported instead, labelled as such |
-| Complexity (CCN), Size, Token cost, Duplication, Churn | measured (L2/L3) |
-| Comment noise | measured (L2), independent of Sonar — but it has its own `not_measured` case; read `layers.comments.status`, step 10 |
-
-**Consequence, said plainly, not implied:** a Sonar-less audit can **structurally never raise a
-P0** — the P0 tier is defined by correctness/security evidence that only L1 produces. Say this in
-the report rather than letting the absence of a P0 read as "nothing urgent."
+  report (step 10).
 
 ## 4. Configure Sonar analysis for this repository
 
@@ -147,19 +150,23 @@ Choose the scanner and analysis parameters from the actual project, not a generi
 
 **Quality profile.** Follow `<plugin-root>/references/sonar.md` and DESIGN §12: extend the built-in
 `Sonar way` profile per language (`create` → `change_parent` → `activate_rule` → `add_project`),
-never `copy` it. On a `403` from insufficient permission, fall back to the built-in profile, mark
-`L1: partial`, and print the reason and the permission needed — this is not a failure, it is the
-honest state described in step 3's table.
+never `copy` it. A `403` means the token lacks **Administer Quality Profiles**: stop the audit with
+that reason and the fix (a token of a user with that permission — the admin token `sonar_ready.py`
+mints has it). Do not fall back to the built-in profile.
 
-**Coverage discipline.** Reuse existing coverage reports when they correspond to the current source
-state. If the repository has an obvious documented/local-safe coverage command, it may be run; do
-not invent or edit test configuration merely to obtain coverage. Rewrite report paths to be
-repository-relative before import, and confirm in the scanner log that each report was actually
-matched. Report coverage as `unavailable` per language when no report was matched — **never `0 %`**.
+**Coverage is fed to Sonar whenever the repository can produce it.** Reuse existing coverage reports
+when they correspond to the current source state. Otherwise run the repository's own documented
+test command with coverage (`pytest --cov`, `vitest --coverage`, `jest --coverage`, a `make` target)
+with the report written **outside the repository** (`--cov-report=xml:<tmp>/coverage.xml`,
+`COVERAGE_FILE=<tmp>/.coverage`, `--coverage.reportsDirectory=<tmp>/…`); do not invent or edit test
+configuration. Rewrite report paths to be repository-relative before import, and confirm in the
+scanner log that each report was actually matched. Only when the repository has no runnable test
+command with coverage, or it needs services the machine does not have, the Coverage row says exactly
+that — never `0 %`, never a bare «not measured».
 
 ## 5. Decide whether to reuse or rerun Sonar
 
-`measure.py` is cheap and local: always run it fresh (step 2). Sonar analysis is the expensive part
+`measure.py` is cheap and local: always run it fresh (step 3). Sonar analysis is the expensive part
 worth reusing. Reuse a previous Sonar analysis only when all of these hold:
 
 - the working tree is clean;
@@ -187,6 +194,34 @@ guessing.
 5. After analysis, verify the repository's tracked/staged state is identical to the baseline from
    step 1. Remove only temporary artifacts created by this audit when unambiguously known; never
    delete pre-existing files.
+
+### Explain every rating
+
+```bash
+SONAR_TOKEN="$(cat <token_file>)" python3 <plugin-root>/scripts/sonar_ratings.py \
+  --host <host> --project <project-key> > <tmp>/ratings.json
+```
+
+For reliability, security, maintainability, security review, coverage and duplication it gives the
+letter (or percent), the issues that set it (`driven_by`: the letter is the worst severity present,
+so these exact issues decide it), the counts by severity, and `next`: the letter after they are
+gone and what that takes. A `mismatch` means Sonar's letter disagrees with the open issues — say so.
+
+Decide for every `driven_by` issue, after reading the code at its locator, which of three it is:
+
+- **Real problem** — it belongs to a fix group like any finding.
+- **Misleading** — the rule fires on a correct pattern (a framework idiom, generated or test code
+  analysed as source). The group's remediation is the architecturally correct cure of the cause:
+  change the code pattern the rule trips on; a rule or profile setting kept in the repository's
+  Sonar configuration with a written reason; or a correct scanner setup (sources/tests split,
+  generated code, coverage report paths). Name which one and why.
+- **Scanner setup** — the letter comes from what was analysed, not from the code (tests counted as
+  source, vendored code, a coverage report that matched nothing). The fix is the scanner setup.
+
+Never game the letter: no blanket `NOSONAR`, no deleting tests, no disabling a rule without a
+written reason, no excluding real code, no marking issues false-positive in the Sonar UI. The
+audit itself changes nothing — the decision goes into the group. The goal is a letter that shows
+the real state.
 
 ## 7. From findings to groups
 
@@ -220,6 +255,11 @@ re-ranking findings is forbidden (`<plugin-root>/references/ledger.md`,
 **Parameter-set clustering** for `too_many_params`: `measure.py`'s Python `ast` pass emits each
 function's ordered parameter-name tuple; group functions by Jaccard ≥ 0.6 over their parameter-name
 **sets**. Languages with no `ast` pass fall back to grouping by subsystem — say which was used.
+
+**Rating groups come first.** A group whose remediation removes the issues in some rating's
+`driven_by` carries `rating: {metric, from, to}` (from `ratings.json`: current letter and `next`
+letter) and is ranked before every other group of its priority tier — a P1 that raises a rating
+goes ahead of other P1s.
 
 Prefer this priority order when evidence supports it: correctness/reliability/security risk;
 high-complexity or high-coupling code that is costly/risky to change; meaningful duplication and
@@ -268,6 +308,9 @@ locator-not-source-of-truth rules; do not restate the schema from memory.
   See "Carrying the queue across an audit" in `<plugin-root>/references/ledger.md`.
 - Store only locators (paths, function names, finding/issue/rule ids, metric values) — never
   source snippets, secrets, or raw API dumps.
+- Record in `audit.tools` the exact version of every measuring tool, the SonarQube server and the
+  scanner, and in `audit.ratings` the letter of each Sonar rating. A rating group carries
+  `rating: {metric, from, to}` so `/code-health:fix` re-checks that letter after the change.
 
 ## 10. Report for a human, not for a scanner
 
@@ -276,14 +319,19 @@ report carries roughly 15 lines of genuinely new content (the provisioning line,
 Scorecard rows, the Agent ergonomics section, per-layer status, noise accounting); do not shrink
 back to the old budget, that just drops one of those silently.
 
-1. **Provisioning** — the one-line tool-provisioning summary from step 2.
+1. **Provisioning** — the one-line summary from steps 2 and 3: what `sonar_ready.py` did (Docker
+   started, server upgraded, token minted), exact tool, server and scanner versions, any update
+   that failed.
 2. **Repository health** — one-line verdict based on overall findings/metrics, plus quality-gate
-   status (if L1 ran), analyzed revision/time, and whether Sonar was reused or freshly scanned.
-   When `L1: not_measured`/`partial`, say so with the reason here, not only in the Scorecard.
+   status, analyzed revision/time, and whether Sonar was reused or freshly scanned.
 3. **Scorecard** — Reliability, Security, Maintainability, Complexity, Duplication, Coverage, plus
-   the new **Size**, **Token cost**, **Churn** and **Comment noise** rows. Every row carries a
-   plain-language status and an explicit `measured` / `not measured` tag; use the step-3 table for
-   what to write when `not measured`.
+   **Size**, **Token cost**, **Churn** and **Comment noise**. Every row carries a plain-language
+   status. Sonar rows are always measured (the audit stops otherwise); Coverage without a runnable
+   coverage command says so in words. Cognitive complexity comes from Sonar, CCN from `lizard`,
+   each under its own name.
+4. **Ratings** — for each Sonar rating below A: the letter, the issues that set it (rule, file:line,
+   how many), the verdict on them (real / misleading / scanner setup, from step 6) and what moves it
+   to the next letter. One or two lines per rating; the full issue list stays in the ledger.
 
    **The Comment noise row** reads `layers.comments.status` and never softens it:
    - `measured` — read `layers.comments.totals`: `noise_comment_lines` and how many files carry
@@ -304,23 +352,23 @@ back to the old budget, that just drops one of those silently.
 
    A `0` from a `not_measured` layer, and a `null` `evidence.commented_out`, are never reported as
    "clean" — that is the same defect this skill refuses for coverage and for JS/TS dead code.
-4. **Fix first** — at most five grouped priorities, labelled `A1`, `A2`, ... . For each: `P0`
-   /`P1`/`P2`/`P3`; short problem name; why it matters (including any hotspot/fan-out/collision
-   evidence that moved its priority); approximate scope (issue count/files/modules); recommended
+5. **Fix first** — at most five grouped priorities, labelled `A1`, `A2`, ... , rating groups first.
+   For each: `P0`/`P1`/`P2`/`P3`; short problem name; for a rating group the expected letter after
+   the fix («надёжность E → D»); why it matters (including any hotspot/fan-out/collision evidence
+   that moved its priority); approximate scope (issue count/files/modules); recommended
    remediation direction; enough rule/finding identity to select it without dumping every key.
-5. **Hotspots** — only when useful, the few files/modules concentrating disproportionate
+6. **Hotspots** — only when useful, the few files/modules concentrating disproportionate
    complexity, duplication, or important findings. Not a file dump.
-6. **Agent ergonomics** (new, ≤10 lines) — token cost (largest/most expensive files), symbol
+7. **Agent ergonomics** (≤10 lines) — token cost (largest/most expensive files), symbol
    collisions, churn×complexity hotspots, edit fan-out; each tagged `measured`/`not measured`. This
    is model-context cost, not code quality — keep it separate from the Scorecard and from Fix
    first, per `references/quality-policy.md`'s "Agent-ergonomics metrics".
-7. **Worth noting** — meaningful lower-priority patterns, false-positive candidates, or missing
-   signals (e.g. unavailable coverage).
-8. **Agent review** — optional, at most three observations (step 8).
+8. **Worth noting** — meaningful lower-priority patterns, false-positive candidates, or missing
+   signals (e.g. no runnable coverage command).
+9. **Agent review** — optional, at most three observations (step 8).
 
 Include the local Sonar dashboard URL when useful for drilling into details, and announce any
-actual Sonar-server write (project created, profile created/reconciled) here per the permission
-boundary in the hard rules.
+actual Sonar-server write (project created, profile created/reconciled) here.
 
 Finish with one copyable handoff for a fresh session, using the display label:
 `/code-health:fix A1`

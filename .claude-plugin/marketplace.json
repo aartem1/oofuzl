@@ -8,8 +8,8 @@
     {
       "name": "code-health",
       "source": "./",
-      "description": "Audit, fix, and ratchet repository code health: local metrics, optional SonarQube, a debt ledger, and a pre-commit guard",
-      "version": "0.6.0"
+      "description": "Audit, fix, and ratchet repository code health: local metrics, required SonarQube with explained ratings, a debt ledger, and a pre-commit guard",
+      "version": "0.7.0"
     }
   ]
 }

@@ -30,7 +30,10 @@ tree and from every git worktree of it.
     "layers": { "L1": "measured", "L2": "measured", "L3": "partial" },
     "summary": { /* verbatim copy of measure.py's summary -- the repo-wide anti-gaming baseline */ },
     "sonar": { "host": "http://localhost:9000", "analysis_key": "...", "revision": "abc123",
-               "profile": "Code Health — github:owner:repo" }
+               "profile": "Code Health — github:owner:repo" },
+    "tools": { "lizard": "1.26.1", "jscpd": "5.4.3", "sonarqube": "26.8.0", "sonar-scanner": "8.1.0.5000" },
+    "ratings": { "reliability": "E", "security": "A", "maintainability": "A",
+                 "security_review": "E", "coverage": 41.2, "duplication": 3.1 }
   },
   "groups": [
     { "gid": "nd-7f3a91c4", "label": "A1", "priority": "P1",
@@ -41,7 +44,15 @@ tree and from every git worktree of it.
       "files": ["..."], "functions": ["file.py:compute_summary_payload"],
       "sonar_issue_keys": [], "rule_keys": [],
       "metric": { "name": "near_duplicate", "worst": 0.91, "threshold": 0.60, "count": 16 },
-      "remediation": "Extract one cache-protocol module; the 16 call sites become thin adapters." }
+      "remediation": "Extract one cache-protocol module; the 16 call sites become thin adapters." },
+    { "gid": "rt-0c1d2e3f", "label": "A1", "priority": "P1",
+      "title": "FastAPI dependency calls read as wrong-arity calls (S930)",
+      "kind": "sonar_rating", "layer": "L1",
+      "rating": { "metric": "reliability", "from": "E", "to": "D" },
+      "verdict": "misleading",
+      "sonar_issue_keys": ["AY..."], "rule_keys": ["python:S930"],
+      "files": ["backend/api/routes.py"],
+      "remediation": "Change the call pattern the rule trips on; keep behaviour." }
   ],
   "queue": {
     "created_at": "...",
@@ -50,11 +61,20 @@ tree and from every git worktree of it.
     "items": [
       { "gid": "nd-7f3a91c4", "state": "done", "commit": "def456",
         "started_at": "...", "finished_at": "...", "note": "" },
-      { "gid": "cx-2b81ee07", "state": "pending" }
+      { "gid": "cx-2b81ee07", "state": "pending" },
+      { "gid": "rt-0c1d2e3f", "state": "done", "commit": "0a1b2c3",
+        "rating_before": "E", "rating_after": "D" }
     ]
   }
 }
 ```
+
+`rating` is present only on a group whose remediation removes the issues that set a Sonar rating
+(`driven_by` from `scripts/sonar_ratings.py`): `from` is the current letter, `to` the letter after
+the fix. `verdict` says whether those issues are a `real` problem, `misleading` rule hits, or a
+`scanner_setup` artefact. `fix` re-checks the letter after the change and stores `rating_before` /
+`rating_after` on the queue item. `audit.tools` holds exact versions so a later audit can tell a tool
+upgrade from a code change.
 
 ## Group identity: `gid` versus `label`
 

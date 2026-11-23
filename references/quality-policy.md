@@ -193,13 +193,19 @@ to inspect, not proof. Two things the report states rather than leaving the read
   (`// loop through items` over `for item in items:`) shares no lexical overlap with it and needs a
   language model to catch; this layer does not run one.
 
-## The Sonar-less ceiling
+## Sonar is required, and its letters must be true
 
-A Sonar-less audit can **structurally never raise a P0**. The P0 tier is defined by
-correctness/reliability/security evidence, and only L1 (Sonar) produces that evidence — L2/L3
-measure size, duplication, import structure, dead code, and churn, none of which is itself a
-correctness or security finding. When `L1: not_measured`, say so plainly in the report rather than
-implying the repository has no P0: the true answer is "not measured", not "none found".
+P0 is defined by correctness/reliability/security evidence, and only Sonar produces it — L2/L3
+measure size, duplication, import structure, dead code and churn. That is why the audit does not
+run without Sonar (`references/sonar.md`).
+
+A rating is evidence only when it shows the real state. Before a letter drives priority, read the
+issues that set it (`scripts/sonar_ratings.py`, `driven_by`) and classify each: real problem,
+misleading rule hit, or scanner-setup artefact. Groups that raise a rating rank first in their tier
+and carry the expected letter. For misleading hits the remediation is architectural — change the
+pattern the rule trips on, a reasoned rule/profile setting in the repository's Sonar
+configuration, a correct sources/tests/generated split, correct coverage paths — never bulk
+`NOSONAR`, deleted tests, unexplained disabled rules, excluded real code, or a false-positive mark.
 
 ## Human-facing language
 

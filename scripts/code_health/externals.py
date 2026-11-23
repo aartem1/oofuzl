@@ -8,6 +8,7 @@ No `pip install --user`: PEP 668 rejects it on a Homebrew Python. The third
 fallback is a plugin-owned venv under XDG_DATA_HOME.
 """
 
+import http.client
 import json
 import os
 import re
@@ -15,13 +16,19 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 
+# The pinned versions are the FALLBACK. `measure.py --update-tools` resolves the
+# latest stable release from the registry and installs exactly that; these
+# constants are what a run uses when the registry cannot be reached and the
+# tool is not installed yet. A new version can change exit codes or output
+# under the plugin: vulture 2.x moved "dead code found" from exit 1 to exit 3,
+# and the dead-code layer silently stopped reporting anything -- which is why
+# the running version is recorded in the `tools` block and in the history line.
 LIZARD_VERSION = "1.23.0"
-# Pinned like lizard: an unpinned tool changes its exit codes or output under
-# the plugin. vulture 2.x moved "dead code found" from exit 1 to exit 3, and
-# the dead-code layer silently stopped reporting anything.
 VULTURE_VERSION = "2.16"
+REGISTRY_TIMEOUT = 15
 
 # Chunked so a large repository does not exceed the OS argv limit; same
 # size and same reason as sizes.py.
@@ -32,29 +39,50 @@ _VENV = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share
 
 TOOLS = {
     "lizard": {
-        "kind": "python", "package": "lizard==%s" % LIZARD_VERSION,
+        "kind": "python", "pkg": "lizard", "pin": LIZARD_VERSION,
         "probe": ["lizard", "--version"],
     },
     "vulture": {
-        "kind": "python", "package": "vulture==%s" % VULTURE_VERSION, "probe": ["vulture", "--version"],
+        "kind": "python", "pkg": "vulture", "pin": VULTURE_VERSION,
+        "probe": ["vulture", "--version"],
     },
     "pre-commit": {
-        "kind": "python", "package": "pre-commit", "probe": ["pre-commit", "--version"],
+        "kind": "python", "pkg": "pre-commit", "pin": None,
+        "probe": ["pre-commit", "--version"],
     },
-    "jscpd": {"kind": "npx", "package": "jscpd@5.4.1", "probe": ["--version"]},
-    "madge": {"kind": "npx", "package": "madge@8.0.0", "probe": ["--version"]},
-    "knip": {"kind": "npx", "package": "knip@6", "probe": ["--version"]},
+    "jscpd": {"kind": "npx", "pkg": "jscpd", "pin": "5.4.1", "probe": ["--version"]},
+    "madge": {"kind": "npx", "pkg": "madge", "pin": "8.0.0", "probe": ["--version"]},
+    "knip": {"kind": "npx", "pkg": "knip", "pin": "6", "probe": ["--version"]},
 }
 
-for _name, _spec in TOOLS.items():
-    if _spec["kind"] == "python":
-        _spec["install"] = [
-            ["uv", "tool", "install", _spec["package"]],
-            ["pipx", "install", _spec["package"]],
-            [sys.executable, "-m", "venv", str(_VENV)],
-        ]
-    else:
-        _spec["install"] = [["npx", "-y", _spec["package"]] + _spec["probe"]]
+
+def _spec(name, version=None):
+    """Package spec for `version` (default: the pinned fallback)."""
+    tool = TOOLS[name]
+    version = version or tool["pin"]
+    if tool["kind"] == "npx":
+        return "%s@%s" % (tool["pkg"], version)
+    return "%s==%s" % (tool["pkg"], version) if version else tool["pkg"]
+
+
+for _name, _tool in TOOLS.items():
+    _tool["package"] = _spec(_name)
+
+
+def install_commands(name, version=None):
+    """Install argv list, in the order the channels are tried. With `version`
+    the install is forced to exactly that version; without, the pinned
+    fallback is installed the way it always was."""
+    tool = TOOLS[name]
+    spec = _spec(name, version)
+    if tool["kind"] == "npx":
+        return [["npx", "-y", spec] + tool["probe"]]
+    force = ["--force"] if version else []
+    return [
+        ["uv", "tool", "install"] + force + [spec],
+        ["pipx", "install"] + force + [spec],
+        [sys.executable, "-m", "venv", str(_VENV)],
+    ]
 
 
 def _absent(reason):
@@ -72,9 +100,11 @@ def _version_line(proc):
 
 def _npx_argv(name, tool_state):
     """Prefer a binary probe() already resolved on PATH; otherwise go through
-    npx, which re-resolves the package on every call."""
+    npx with the spec the survey settled on (the resolved latest version after
+    `--update-tools`, the pinned fallback otherwise)."""
     binary = (tool_state or {}).get("bin")
-    return [binary] if binary else ["npx", "-y", TOOLS[name]["package"]]
+    spec = (tool_state or {}).get("spec") or TOOLS[name]["package"]
+    return [binary] if binary else ["npx", "-y", spec]
 
 
 def _run(argv, timeout=120, cwd=None):
@@ -134,11 +164,12 @@ def _venv_bin(name):
     return str(candidate) if candidate.exists() else None
 
 
-def provision(name):
+def provision(name, version=None):
     spec = TOOLS.get(name)
     if spec is None:
         return _absent("unknown tool %r" % name)
-    for argv in spec["install"]:
+    commands = install_commands(name, version)
+    for argv in commands:
         if not shutil.which(argv[0]) and argv[0] != sys.executable:
             continue
         out = _run(argv, timeout=600)
@@ -146,7 +177,7 @@ def provision(name):
             continue
         if argv[0] == sys.executable:
             pip = _VENV / "bin" / "pip"
-            if _run([str(pip), "install", spec["package"]], timeout=600) is None:
+            if _run([str(pip), "install", _spec(name, version)], timeout=600) is None:
                 continue
         elif spec["kind"] == "npx":
             # `npx -y <pkg>` populates npx's OWN cache, keyed by the package
@@ -157,21 +188,114 @@ def provision(name):
             # tools run fine. The install command already ran the probe
             # arguments, so its own output is the evidence.
             return {"available": True, "version": _version_line(out),
-                    "reason": None, "installed_by_us": True}
+                    "reason": None, "installed_by_us": True,
+                    "spec": _spec(name, version)}
         state = probe(name)
         if state["available"]:
             state["installed_by_us"] = True
             return state
     return _absent("could not install %s (tried: %s)"
-                   % (name, "; ".join(" ".join(a) for a in spec["install"])))
+                   % (name, "; ".join(" ".join(a) for a in commands)))
 
 
-def survey(names, install_missing=False):
+_STABLE = re.compile(r"^\d+(?:\.\d+){0,3}$")
+_VERSION_IN_TEXT = re.compile(r"\d+(?:\.\d+)+")
+
+
+def _http_json(url, timeout=REGISTRY_TIMEOUT):
+    request = urllib.request.Request(url, headers={"User-Agent": "code-health",
+                                                   "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def latest_version(name):
+    """`(version, None)` for the newest stable release in the tool's registry,
+    or `(None, one-line reason)`. PyPI's `info.version` and npm's `latest`
+    dist-tag are both stable by construction; anything that does not look like
+    a plain release number is refused anyway."""
+    tool = TOOLS.get(name)
+    if tool is None:
+        return None, "unknown tool %r" % name
+    if tool["kind"] == "npx":
+        url, path = "https://registry.npmjs.org/%s/latest" % tool["pkg"], ("version",)
+    else:
+        url, path = "https://pypi.org/pypi/%s/json" % tool["pkg"], ("info", "version")
+    try:
+        data = _http_json(url, timeout=REGISTRY_TIMEOUT)
+        for key in path:
+            data = data[key]
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as exc:
+        return None, ("registry unreachable or unreadable (%s): %s"
+                      % (url, " ".join(str(exc).split())[:120]))
+    if not isinstance(data, str) or not _STABLE.match(data):
+        return None, "registry latest %r is not a stable release" % (data,)
+    return data, None
+
+
+def _same_version(a, b):
+    def number(text):
+        found = _VERSION_IN_TEXT.search(text or "")
+        return found.group(0) if found else (text or "").strip().lstrip("v")
+    return bool(a) and bool(b) and number(a) == number(b)
+
+
+def update_tool(name):
+    """Install the latest stable release of one tool, or leave it as it was.
+
+    Never raises and never makes a working tool worse: a failed lookup or a
+    failed install keeps what is installed and leaves a one-line reason in
+    `update_error`. A tool that is missing falls back to the pinned version.
+    """
+    before = probe(name)
+    previous = before["version"] if before["available"] else None
+    latest, error = latest_version(name)
+    state = before
+    if latest:
+        if not (before["available"] and _same_version(previous, latest)):
+            installed = provision(name, latest)
+            if installed["available"]:
+                state = installed
+                if not _same_version(state["version"], latest):
+                    error = ("installed %s but the tool on PATH reports %s"
+                             % (_spec(name, latest), state["version"]))
+            else:
+                error = "could not install %s: %s" % (_spec(name, latest),
+                                                      installed["reason"])
+                if not before["available"]:
+                    state = provision(name)
+        if TOOLS[name]["kind"] == "npx" and state.get("available") \
+                and "bin" not in state and _same_version(state.get("version"), latest):
+            state = dict(state, spec=_spec(name, latest))
+    elif not before["available"]:
+        state = provision(name)
+    state = dict(state)
+    state["latest"] = latest
+    state["previous_version"] = previous
+    state["updated"] = bool(previous and state.get("available")
+                            and not _same_version(previous, state.get("version")))
+    state["update_error"] = error
+    return state
+
+
+_VERSION_KEYS = {"latest": None, "updated": False, "previous_version": None,
+                 "update_error": None}
+
+
+def survey(names, install_missing=False, update=False):
+    """Probe each tool. `install_missing` installs what is absent (pinned
+    version); `update` also resolves the latest stable release and moves every
+    tool to it, falling back to the installed or pinned one on any failure."""
     block = {}
     for name in names:
-        state = probe(name)
-        if not state["available"] and install_missing:
-            state = provision(name)
+        if update and name in TOOLS:
+            state = update_tool(name)
+        else:
+            state = probe(name)
+            if not state["available"] and install_missing:
+                state = provision(name)
+        for key, default in _VERSION_KEYS.items():
+            state.setdefault(key, default)
         block[name] = state
     return block
 
@@ -284,7 +408,15 @@ def run_dead(repo_root, inventory, tool_states):
                 reasons.append("vulture could not analyze every file: %s"
                                % (proc.stderr or "").strip()[:200])
             measured.append("python")
-            findings.extend(_parse_vulture(proc.stdout))
+            parsed = _parse_vulture(proc.stdout)
+            findings.extend(parsed)
+            # The latest vulture is installed, not the one this parser was
+            # verified against. A line it cannot read must not turn into a
+            # silent zero: the layer says it was not fully parsed.
+            lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            if len(parsed) < len(lines):
+                reasons.append("vulture output could not be parsed: %d of %d lines"
+                               % (len(lines) - len(parsed), len(lines)))
     elif py:
         reasons.append("vulture unavailable: %s" % vulture.get("reason"))
 

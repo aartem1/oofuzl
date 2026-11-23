@@ -1,7 +1,7 @@
 {
   "name": "code-health",
-  "version": "0.6.0",
-  "description": "Measure, fix, and ratchet repository code health for AI-agent work: local metrics, optional SonarQube, a debt ledger, and a pre-commit guard",
+  "version": "0.7.0",
+  "description": "Measure, fix, and ratchet repository code health for AI-agent work: local metrics, required SonarQube with explained ratings, a debt ledger, and a pre-commit guard",
   "author": {
     "name": "Artem"
   },
@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Code Health",
     "shortDescription": "Аудит, исправление и храповик технического долга.",
-    "longDescription": "Меряет размер файлов и функций, сложность, число параметров, вложенность, токен-цену, дубликаты, циклы импортов, мёртвый код и частоту изменений. SonarQube — необязательный слой: без него аудит честно помечает слой «не измерен» и продолжает. Ведёт книгу долга, исправляет группы по очереди с прогоном тестов проекта после каждой, и ставит pre-commit хук, который не даёт коммиту ухудшить метрики.",
+    "longDescription": "Меряет размер файлов и функций, сложность, число параметров, вложенность, токен-цену, дубликаты, циклы импортов, мёртвый код и частоту изменений. SonarQube обязателен: аудит сам запускает Docker, поднимает и обновляет SonarQube, выпускает токен и объясняет каждый рейтинг — какие задачи задают букву и что нужно для следующей. Без работающего Sonar аудит останавливается и называет причину. Ведёт книгу долга, исправляет группы по очереди с прогоном тестов проекта после каждой, и ставит pre-commit хук, который не даёт коммиту ухудшить метрики.",
     "developerName": "Artem",
     "category": "Developer Tools",
     "capabilities": [

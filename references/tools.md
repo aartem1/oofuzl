@@ -195,6 +195,38 @@ machine. Python tool provisioning (`lizard`, `vulture`, `pre-commit`) therefore 
 `${XDG_DATA_HOME:-$HOME/.local/share}/code-health/venv` as the fallback that always works regardless
 of how the system Python is managed.
 
+## Tool versions: latest stable per audit
+
+`measure.py --update-tools` (implies `--install-missing`) moves each tool the requested layers need
+to the latest stable release before measuring:
+
+- The version comes from the tool's registry, with a 15-second timeout: PyPI
+  `https://pypi.org/pypi/<pkg>/json` (`info.version`) for `lizard`, `vulture`, `pre-commit`; the npm
+  registry `https://registry.npmjs.org/<pkg>/latest` for `jscpd`, `madge`, `knip`. Both give the
+  stable release; a version that is not a plain release number is refused.
+- Python tools: `uv tool install --force <pkg>==<v>` → `pipx install --force <pkg>==<v>` → the
+  plugin venv with `pip install <pkg>==<v>`. npx tools run as `npx -y <pkg>@<v>`: the spec is kept in
+  the tool's state (`spec`) and used for the probe, the install and every run of the audit.
+- The constants in `code_health/externals.py` (`LIZARD_VERSION`, `VULTURE_VERSION`, the `pin` of each
+  npx tool) are the **fallback**: they are what gets installed when the registry cannot be reached
+  and the tool is missing. A tool that is already installed is never made worse: a failed lookup or
+  install keeps it, and the reason goes to `update_error`.
+- The `tools` block records, per tool, `version` (what actually ran), `latest` (registry answer or
+  `null`), `previous_version` (before this run), `updated` (the version changed in this run; a fresh
+  install is `installed_by_us`, not `updated`) and `update_error` (one line or `null`). A PATH binary
+  that shadows the one just installed shows up as `update_error`, not as a silent success.
+- `--history` lines carry `tools: {name: version}`. The next audit compares them with its own tools
+  and `--brief` adds `tool_changes` and a one-line `tool_changes_note` ("Инструменты обновились с
+  прошлого аудита: lizard 1.23.0 → …") when something moved, so a metric jump after an upgrade is
+  not read as a change in the code.
+- What an unpinned tool can break is the reason the pins exist at all (see the `vulture` exit codes
+  below). The parsers therefore refuse to guess: an exit code outside the known set is
+  `not_measured`, vulture output the parser cannot read makes the layer `partial`, and a lizard CSV
+  of another width is an error.
+- `scripts/guard.py` and the pre-commit hook keep `lizard==1.23.0` pinned on purpose: the baseline
+  and its enforcement must run one lizard. `--update-tools` changes the audit's lizard, not the
+  guard's.
+
 ## `madge --circular`
 
 `madge --circular <path>` **replaces** the dependency map in its output rather than adding cycle
@@ -207,7 +239,7 @@ and a second tool would only be justified by a query madge cannot express.
 
 ## `vulture` exit codes
 
-Pinned at `vulture==2.16`. Verified exit codes of that version: `0` — clean; `3` — dead code found;
+Verified at `vulture==2.16` (the pinned fallback; `--update-tools` may run a newer one). Verified exit codes of that version: `0` — clean; `3` — dead code found;
 `1` — a file could not be parsed and nothing else was found; `2` — bad arguments. A file that cannot
 be parsed is named on stderr whatever the exit code, so a run with stderr is `partial`. Older
 versions exited `1` for dead code; the plugin used to accept only `0` and `1`, so with 2.16 every

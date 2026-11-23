@@ -2,46 +2,53 @@
 
 Use the installed SonarQube Web API documentation at `/web_api` as the source of truth when endpoints differ from these examples. Sonar is migrating endpoints toward Web API v2.
 
-## Discover a local server first
+## Bring the server up: `scripts/sonar_ready.py`
 
-1. Require a working Docker-compatible CLI: `docker info` must succeed. Do not install Docker Desktop, Colima, OrbStack, or another container runtime implicitly.
-2. Inspect existing containers before creating anything:
-   - `docker ps -a --format '{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Ports}}\t{{.Status}}'`
-3. Prefer an existing SonarQube Community Build instance that is reachable and healthy. Check `http://localhost:9000/api/system/status` and, when authenticated, `/api/system/health`.
-4. Start a stopped compatible container rather than creating a duplicate.
+Sonar is a precondition of the audit. `scripts/sonar_ready.py` does everything below and either
+prints a ready JSON document or stops the audit with a reason and one fix command. Run it before any
+measuring; do not repeat its steps by hand.
 
-## First-time local installation
-
-Only after explicit user approval:
-
-- Prefer the official `sonarqube:community` image for a personal local installation.
-- Use persistent named volumes so settings and analysis history survive container restarts:
-  - `sonarqube_data:/opt/sonarqube/data`
-  - `sonarqube_extensions:/opt/sonarqube/extensions`
-  - `sonarqube_logs:/opt/sonarqube/logs`
-- A practical personal-local container is conceptually equivalent to:
+1. **Docker.** `docker info` must succeed. On macOS a stopped Docker Desktop is started with
+   `open -a Docker` and awaited (180 s). Docker Desktop, Colima, OrbStack or any other runtime is
+   never installed: a missing `docker` CLI stops the audit.
+2. **Discovery.** `docker ps -a`; any container whose image is `sonarqube` is reused when running
+   and started when stopped, whatever its name. Only when none exists a new one is created:
 
 ```bash
-docker run -d \
-  --name sonarqube \
-  -p 9000:9000 \
-  -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true \
+docker run -d --name sonarqube -p 9000:9000 -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true \
   -v sonarqube_data:/opt/sonarqube/data \
   -v sonarqube_extensions:/opt/sonarqube/extensions \
   -v sonarqube_logs:/opt/sonarqube/logs \
   sonarqube:community
 ```
 
-Use the embedded database only for this local personal-analysis use case. Do not represent it as a production deployment. Reuse an existing externally configured database instead of replacing it.
-
-Wait until `/api/system/status` reports the server is ready before continuing. Surface startup failures from container logs rather than retrying blindly.
+   The embedded database is fine for this personal local use; it is not a production deployment.
+3. **Latest version.** `docker pull sonarqube:community` every audit. A container on an older image
+   is recreated on the new one with the same volumes. The data volume is copied to
+   `code-health-sonarqube-data-backup` first; when the server reports `DB_MIGRATION_NEEDED` the
+   script calls `POST /api/system/migrate_db`; a server that ends `DOWN` gets the copy restored and
+   the previous image back, and the report says the upgrade failed. A container configured with an
+   external database (`SONAR_JDBC_URL`) is never recreated. A failed pull keeps the installed image.
+4. **Readiness.** `/api/system/status` must reach `UP` (300 s), otherwise stop with
+   `docker logs --tail 200 <container>`.
+5. **Token** — below.
+6. **Scanner.** The newest native SonarScanner CLI (version from the GitHub releases API, archive
+   from `binaries.sonarsource.com`) for this platform, unpacked into
+   `~/.cache/code-health/sonar-scanner/<version>/`. When the newest cannot be fetched, the newest
+   cached one is used; with nothing cached the audit stops. The bundled language analyzers ship with
+   the server image, so upgrading the image upgrades them; no separate plugin installs.
 
 ## Authentication
 
 - Default URL: `http://localhost:9000`, unless an existing local instance uses another explicit URL.
 - Prefer `SONAR_HOST_URL` and `SONAR_TOKEN` environment variables.
 - Never put tokens in command history when a safer environment mechanism is available, and never write tokens into the audited repository.
-- If no token exists, ask the user to complete the one-time local authentication/token setup. Do not ask them to paste the token into the conversation.
+- `sonar_ready.py` looks for `SONAR_TOKEN`, then `~/.config/code-health/sonar-token`, then the
+  older `~/.config/sonar-code-health/token`, and validates each with `/api/authentication/validate`.
+  When none is valid it mints one itself: on a fresh server it rotates `admin:admin` to a random
+  password and generates a token; with a stored admin password it generates a token. Both files get
+  mode 600. Only when neither works it stops and asks the user to create a token in
+  `<host>/account/security` and save it to the file. Never ask the user to paste it into the chat.
 - Authenticate API requests with `Authorization: Bearer $SONAR_TOKEN`.
 
 A workable pattern for a personal local server, when the user prefers not to run the setup by
@@ -157,10 +164,9 @@ badly, not about code an agent is likely to fail to read. Verified on a real rep
 functions with ≥8 parameters, `Sonar way` reported 7; of 22 files ≥1000 lines it reported none.
 
 **Permission.** `create`, `change_parent`, `activate_rule`, and `add_project` all require
-**Administer Quality Profiles**. A token minted through the ordinary local-token setup above can
-403 on this. On 403 do **not** fail the audit: fall back to the built-in `Sonar way` profile, mark
-`L1: partial`, and print the reason plus the permission needed. That fallback is the honest state —
-Sonar's blind spots are then real ones, not a plugin bug.
+**Administer Quality Profiles**. The admin token `sonar_ready.py` mints has it. A user-supplied token
+can 403: stop the audit and name the permission. A built-in-profile fallback would silently drop
+S138/S104/S134/S107 and is not done.
 
 **Extend, do not copy.** `POST /api/qualityprofiles/copy` produces a detached snapshot that never
 picks up rules added by later SonarQube upgrades, and its `toName` parameter is documented as the
@@ -248,7 +254,9 @@ Coverage is useful only when it is trustworthy.
 1. Detect existing coverage configuration/report paths first.
 2. If a documented/local-safe repository command already generates coverage, it may be run without changing project files.
 3. Feed the resulting language-appropriate report into Sonar when supported.
-4. If coverage cannot be obtained safely without changing configuration or causing expensive/environment-dependent work, omit it and report `Coverage: unavailable`, not `0%`.
+4. When the repository has a runnable test command with coverage, run it with the report written
+   outside the repository and feed it in — the Coverage row is then measured. Only when it has none,
+   or it needs services this machine lacks, the row says exactly that, never `0%`.
 
 Two things routinely go wrong:
 
@@ -279,6 +287,33 @@ and a non-zero exit code while emitting no `ERROR` line at all, so never treat "
 tail" as "no diagnosis available".
 
 Keep scanner work/cache outside the target repository when possible; otherwise remove only audit-created untracked scanner artifacts after verifying they did not pre-exist.
+
+## Ratings: explain the letter, then make it true
+
+`scripts/sonar_ratings.py --project <key>` (token from `SONAR_TOKEN` or `--token-file`) reads the
+project's measures and open issues and explains each rating. The letter rules are SonarQube's own
+(MQR mode):
+
+| Rating | Set by | A | B | C | D | E |
+|---|---|---|---|---|---|---|
+| Reliability, Security | worst severity of an open issue of that quality | none | LOW | MEDIUM | HIGH | BLOCKER |
+| Maintainability | technical-debt ratio (debt / development cost) | ≤5 % | ≤10 % | ≤20 % | ≤50 % | >50 % |
+| Security review | share of reviewed hotspots | ≥80 % | ≥70 % | ≥50 % | ≥30 % | <30 % |
+
+Coverage and duplication have no letter: the script gives the percent and the files that move it.
+
+So an E in reliability is decided by the BLOCKER issues alone, however many lower issues exist;
+removing them moves the letter to the next-worst severity present. `driven_by` lists exactly those
+issues, `next` the letter after them. Each one is read at its locator and classified as a real
+problem, a misleading rule hit, or a scanner-setup artefact; the cure for the last two is
+architectural (change the pattern the rule trips on, a rule/profile setting with a written reason
+in the repository's Sonar configuration, a correct sources/tests/generated split, correct coverage
+paths), never `NOSONAR` in bulk, deleted tests, disabled rules without a reason, excluded real code
+or a false-positive mark in the UI.
+
+`/code-health:fix` re-checks a rating group's letter by analysing the working tree under the project
+key `<key>:fix` (Community Build has no branch analysis) bound to the same quality profile with
+`add_project`, then running `sonar_ratings.py` on it.
 
 ## Freshness
 

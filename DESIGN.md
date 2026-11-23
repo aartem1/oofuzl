@@ -1,6 +1,6 @@
 # code-health — design
 
-Status: implemented, plugin version 0.6.0. Supersedes `plugins/sonar-code-health` (v0.2.0).
+Status: implemented, plugin version 0.7.0. Supersedes `plugins/sonar-code-health` (v0.2.0).
 
 ## 1. Purpose
 
@@ -49,7 +49,7 @@ Four things Sonar cannot do at any setting, and which this plugin therefore owns
 
 | Layer | Tools | Produces | Consumers |
 |---|---|---|---|
-| **L1 Sonar** | own quality profile (fork of `Sonar way` + S138/S104/S134/S107) | rules, history, quality gate, cognitive complexity, reliability/security findings, coverage, hotspots | `audit` only; **optional** — no Docker ⇒ layer marked `not_measured`, audit continues |
+| **L1 Sonar** | own quality profile (fork of `Sonar way` + S138/S104/S134/S107) | rules, history, quality gate, cognitive complexity, reliability/security findings, coverage, hotspots | `audit` — **required**: `scripts/sonar_ready.py` brings it up first, any failure stops the audit (0.7.0); `fix` re-checks rating groups |
 | **L2 local** | `lizard`, `jscpd`, `madge`, `vulture`, plain `git`, own Python `ast` pass, own near-duplicate pass, own comment reader (`tokenize`, `ast`, a brace-comment scanner; no external tool), direct file reads | size, token cost, CCN, parameters, nesting, exact clones, near-duplicates, import cycles, dead code, comment noise, churn | all three; **the only layer in `guard`** — a pre-commit hook must be fast |
 | **L3 derived** | own code over L2 | churn × complexity hotspots, symbol-name collisions, edit fan-out | `audit` |
 
@@ -65,22 +65,21 @@ cognitive complexity.
 from any tool. This placement is what lets `guard` enforce a token ceiling while remaining
 stdlib-only.
 
-### What is lost when L1 is unavailable
+### L1 is required (0.7.0)
 
-Named explicitly, because §8 must print it rather than leave a silent hole:
+Up to 0.6.0 the audit ran without Sonar and printed a table of rows it could not measure. In
+practice that report was not worth reading: reliability, security, coverage, maintainability rating
+and cognitive complexity exist only in L1, and P0 is defined by that evidence. Since 0.7.0
+`scripts/sonar_ready.py` starts Docker (macOS), pulls the newest SonarQube Community Build, reuses,
+starts, creates or upgrades the container on persistent volumes (data copied first, restored on a
+failed migration), mints a token when none is valid, and fetches the newest native scanner. Any
+failure stops the audit with the reason and one fix command; Docker itself is never installed.
 
-| Scorecard row | Source | Without Sonar |
-|---|---|---|
-| Reliability | L1 only | `not measured` |
-| Security + hotspots | L1 only | `not measured` |
-| Coverage | L1 only | `not measured` (never `0 %`) |
-| Maintainability rating / debt | L1 only | `not measured` |
-| Cognitive complexity | L1 only | `not measured`; CCN reported instead, labelled as such |
-| Complexity (CCN), Size, Token cost, Duplication, Churn | L2/L3 | measured |
-
-Consequence, stated in the report rather than hidden: **a Sonar-less audit can structurally never
-raise a P0**, because the P0 tier is defined by correctness/security evidence that only L1
-produces. The audit says so instead of implying the repository has no P0.
+Ratings are explained, not just shown: `scripts/sonar_ratings.py` lists the issues that set each
+letter (worst severity for reliability/security, debt ratio for maintainability, reviewed share for
+hotspots) and what the next letter needs. The audit classifies those issues as real, misleading or
+scanner setup, ranks rating groups first, and records `rating: {metric, from, to}`; `fix` re-checks
+the letter after the change (`references/sonar.md`, "Ratings").
 
 ## 4. Default thresholds — profile `agent`
 
@@ -752,9 +751,10 @@ rewritten.
 
 New behaviour:
 
-1. **L2 and L3 always run.** `measure.py` runs first; Sonar layers on top when available.
-2. **Works without Sonar** — `L1: not_measured` with the reason printed, and the table in §3
-   printed rather than the rows silently vanishing.
+1. **Sonar first, required** (0.7.0, §3): `sonar_ready.py`, then `measure.py`; a Sonar failure
+   stops the audit.
+2. **Latest tools** (0.7.0): `measure.py --update-tools` brings lizard, jscpd, madge, vulture to
+   the latest stable release; versions go into the report, ledger and history.
 3. **Tool provisioning is automatic, with a report** (§11). No per-tool prompt.
 4. **Sonar quality profile instead of routing around the rules** (§12).
 5. **New report section "Agent ergonomics"**: token cost, symbol collisions, churn × complexity,
@@ -764,7 +764,8 @@ New behaviour:
 ### One new permission boundary
 
 Audit is read-only **for the target repository**. It may write to the **Sonar server** — create the
-project and create/reconcile the quality profile. Disclosed and confirmed once per server. It never
+project and create/reconcile the quality profile. On the local server the audit itself brought up
+this needs no confirmation (0.7.0); any other server is disclosed and confirmed once. It never
 touches the target repo. Reconciliation on later audits is silent only while it is a no-op; any
 actual write to the profile is announced in the report (§12).
 
@@ -1144,7 +1145,7 @@ Cursor, and in CI. No Claude Code hooks.
 | `knip` | JS/TS dead code — **not currently consumed**, its JSON output is not parsed (§5, `references/tools.md`) | `npx -y knip@6` | `dead` (JS/TS) is not measured either way |
 | `pre-commit` | activates the guard hook | `uv tool install` → `pipx` → venv | `guard install` reports and stops before writing anything |
 | `git` | churn | already present | `churn` and every churn-derived L3 metric not measured |
-| Docker + SonarQube | L1 | `references/sonar.md` playbook | `L1: not_measured`, audit continues |
+| Docker + SonarQube | L1 | `scripts/sonar_ready.py` (starts Docker on macOS, never installs it) | audit stops with the reason and one fix command |
 
 **No `pip install --user`.** PEP 668 rejects it on a Homebrew Python — verified, `EXTERNALLY-MANAGED`
 is present on the calibration machine. The third fallback is a plugin-owned `python3 -m venv` under
@@ -1164,11 +1165,9 @@ Installation is reported as one line at the top of the audit output:
 Creating the profile is what turns L1 from misleading into useful.
 
 **Permission.** `create`, `change_parent`, `activate_rule` and `add_project` all require
-**Administer Quality Profiles**. The v0.2.0 playbook mints an ordinary user token, so this can 403
-on a normally-provisioned instance. On 403 the audit does **not** fail: it falls back to the
-built-in `Sonar way` profile, marks `L1: partial`, and prints the reason and the permission needed.
-That fallback is the honest state — Sonar's blind spots are then real, and §2 already says what
-they cost.
+**Administer Quality Profiles**. The admin token `sonar_ready.py` mints has it. A user-supplied
+token can 403; since 0.7.0 the audit then stops and names the permission. The earlier fallback to
+the built-in `Sonar way` profile silently dropped S138/S104/S134/S107 and is gone.
 
 **Extend, do not copy.** `POST /api/qualityprofiles/copy` produces a detached snapshot that never
 picks up rules added by later SonarQube upgrades, and its `toName` is documented as the name for a
@@ -1326,10 +1325,9 @@ scripting, every number already established there by hand:
 
 Three criteria that are not numbers:
 
-- The same audit completes with Docker stopped: `L1: not measured`, the §3 table printed, every
-  non-Sonar row still produced, and no P0 claimed either way.
-- The same audit completes on a token that lacks Administer Quality Profiles: `L1: partial`,
-  `Sonar way` used, the permission named.
+- The same audit with Docker stopped starts Docker, brings Sonar up and measures every Sonar row
+  (0.7.0); without Docker installed it stops with one line saying what to install.
+- A token that lacks Administer Quality Profiles stops the audit and names the permission.
 - `/code-health:guard install` followed by an intentional 50-line growth of an already-oversized
   file fails the commit, and the failure names the file and the baseline.
 

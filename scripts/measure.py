@@ -52,6 +52,10 @@ def parse_args(argv=None):
     parser.add_argument("--layers", default=",".join(F.LAYER_NAMES))
     parser.add_argument("--files", nargs="*")
     parser.add_argument("--install-missing", action="store_true")
+    parser.add_argument("--update-tools", action="store_true",
+                        help="move every tool the layers need to its latest stable release "
+                             "(registry lookup, bounded timeout; implies --install-missing); "
+                             "the pinned versions stay the fallback when the registry fails")
     parser.add_argument("--out")
     parser.add_argument("--history", metavar="FILE",
                         help="append one JSON line with this run's totals to FILE")
@@ -72,7 +76,9 @@ def build_document(args):
     layers = {name: F.empty_layer("layer not requested") for name in F.LAYER_NAMES}
     all_findings = []
 
-    tools = EX.survey(F.tools_for(wanted), install_missing=args.install_missing)
+    tools = EX.survey(F.tools_for(wanted),
+                      install_missing=args.install_missing or args.update_tools,
+                      update=args.update_tools)
 
     if "size" in wanted:
         layers["size"] = S.measure_sizes(repo_root, inventory, cfg)
@@ -152,7 +158,51 @@ def history_line(doc):
         "tokens": summary.get("tokens_total"),
         "layers": {name: layer.get("status") for name, layer in doc["layers"].items()},
         "counts": brief(doc, 0)["counts"],
+        # Versions of the tools that measured this run: the next audit tells a
+        # tool upgrade from a change in the code by comparing them.
+        "tools": {name: state["version"] for name, state in sorted(doc["tools"].items())
+                  if state.get("available") and state.get("version")},
     }
+
+
+def last_history_line(path):
+    """The last line of a history file as a dict, or None when the file is
+    missing, empty or its last line is not a JSON object."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    try:
+        row = json.loads(lines[-1])
+    except ValueError:
+        return None
+    return row if isinstance(row, dict) else None
+
+
+def tool_changes(prev_line, doc):
+    """`[{tool, before, after}]` for every tool whose version differs from the
+    previous audit's history line. A tool unknown on either side is not a
+    change."""
+    before = (prev_line or {}).get("tools")
+    if not isinstance(before, dict):
+        return []
+    changes = []
+    for name, state in sorted(doc["tools"].items()):
+        now = state.get("version") if state.get("available") else None
+        was = before.get(name)
+        if now and was and now != was:
+            changes.append({"tool": name, "before": was, "after": now})
+    return changes
+
+
+def tool_changes_note(changes):
+    if not changes:
+        return None
+    return "Инструменты обновились с прошлого аудита: " + ", ".join(
+        "%s %s → %s" % (c["tool"], c["before"], c["after"]) for c in changes)
 
 
 def _numeric(value):
@@ -196,11 +246,16 @@ def main(argv=None):
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
+    changes = tool_changes(last_history_line(args.history), doc) if args.history else []
     if args.history:
         with open(args.history, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(history_line(doc), ensure_ascii=False, sort_keys=True) + "\n")
     if args.brief is not None:
-        sys.stdout.write(json.dumps(brief(doc, args.brief), indent=2, ensure_ascii=False) + "\n")
+        summary = brief(doc, args.brief)
+        if changes:
+            summary["tool_changes"] = changes
+            summary["tool_changes_note"] = tool_changes_note(changes)
+        sys.stdout.write(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     elif not args.out:
         sys.stdout.write(text + "\n")
     return 0

@@ -157,11 +157,19 @@ With confirmation, in this exact order:
    `PATH`, while the hook will use the pinned one pre-commit installs — so skipping this check
    writes the baseline with one lizard and enforces it with another, which is precisely what "One
    measurement path, one lizard version" (below) exists to prevent, and it produces false failures
-   on untouched code the first time a CCN or nesting calculation shifts upstream. On a mismatch,
-   install the pinned version first (`uv tool install "lizard==1.23.0"` → `pipx install
-   "lizard==1.23.0"` → the plugin-owned venv, the same order as
-   `<plugin-root>/references/tools.md`), or point `CODE_HEALTH_LIZARD` at a binary of that version
-   for this one command. Do not proceed with a different version.
+   on untouched code the first time a CCN or nesting calculation shifts upstream. A mismatch is
+   normal: `audit` keeps the shared `lizard` at the latest release. Do not downgrade it — that
+   would only be upgraded again by the next audit. Use a separate pinned copy for this one command:
+
+   ```bash
+   python3 -m venv "${XDG_DATA_HOME:-$HOME/.local/share}/code-health/lizard-1.23.0"
+   "${XDG_DATA_HOME:-$HOME/.local/share}/code-health/lizard-1.23.0/bin/pip" install "lizard==1.23.0"
+   CODE_HEALTH_LIZARD="${XDG_DATA_HOME:-$HOME/.local/share}/code-health/lizard-1.23.0/bin/lizard" \
+     python .code-health/guard.py --baseline .code-health/baseline.json --repo .
+   ```
+
+   Do not proceed with a different version. The guard's pin stays deliberately: a baseline is only
+   comparable when one lizard version writes and enforces it.
 
    This is what "one measurement path" means in practice: the same script and the same pinned
    lizard version write the baseline and later enforce it.
