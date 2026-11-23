@@ -86,14 +86,19 @@ def _first(measures, *keys):
     return None
 
 
+SEARCH_LIMIT = 10000
+
+
 def _issues(api, project, quality):
     issues, page = [], 1
     while True:
-        body = api.get("/api/issues/search", componentKeys=project, resolved="false",
+        body = api.get("/api/issues/search", components=project, resolved="false",
                        impactSoftwareQualities=quality, ps=500, p=page)
         issues.extend(body.get("issues", []))
         total = body.get("paging", {}).get("total", body.get("total", 0))
-        if page * 500 >= total or not body.get("issues"):
+        # The search answers 400 past its 10 000th result; the worst issues
+        # that set the letter are a small part of that.
+        if page * 500 >= min(total, SEARCH_LIMIT) or not body.get("issues"):
             return issues
         page += 1
 

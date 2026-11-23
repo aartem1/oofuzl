@@ -107,10 +107,10 @@ def _npx_argv(name, tool_state):
     return [binary] if binary else ["npx", "-y", spec]
 
 
-def _run(argv, timeout=120, cwd=None):
+def _run(argv, timeout=120, cwd=None, env=None):
     try:
         return subprocess.run(argv, capture_output=True, text=True,
-                              timeout=timeout, cwd=cwd)
+                              timeout=timeout, cwd=cwd, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -391,8 +391,12 @@ def run_dead(repo_root, inventory, tool_states):
 
     vulture = tool_states.get("vulture", {})
     if py and vulture.get("available"):
+        # Python warnings (SyntaxWarning for an invalid escape) go to stderr
+        # while the file is still analyzed; silenced so stderr names only
+        # files vulture could not parse.
         proc = _run([vulture.get("bin", "vulture"), "--min-confidence", "80"] + py,
-                    cwd=str(repo_root), timeout=600)
+                    cwd=str(repo_root), timeout=600,
+                    env=dict(os.environ, PYTHONWARNINGS="ignore"))
         # vulture 2.16: 0 -- clean, 3 -- dead code found, 1 -- a file could
         # not be parsed and nothing else was found, 2 -- bad arguments. A
         # file that cannot be parsed is named on stderr whatever the exit

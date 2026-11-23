@@ -160,15 +160,23 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
    baseline, never to this fix.
 5. **Re-measure this group's dimension again and run the anti-gaming check** (step 4 below),
    including comparing the repo-wide `summary` against `queue.baseline_summary` from step 2.
-5a. **A rating group re-checks its letter.** When the group carries `rating: {metric, from, to}`,
-   bring Sonar up with `python3 <plugin-root>/scripts/sonar_ready.py` (it stops the item with the
-   reason if Sonar cannot work — mark the item `failed`, end the cycle), run the analysis of the
-   working tree as the audit does (`<plugin-root>/references/sonar.md`; project key
-   `<project-key>:fix` so the main analysis history stays clean), then
-   `python3 <plugin-root>/scripts/sonar_ratings.py --project <project-key>:fix`. Record
-   `rating_before`/`rating_after` on the queue item and report them. A letter that did not reach
-   `to` is said plainly with the issues still in `driven_by`; it does not fail the item when the
-   group's own issues are gone.
+5a. **A rating group re-checks its letter.** When the group carries `rating: {metric, from, to}`:
+   - Bring Sonar up with `python3 <plugin-root>/scripts/sonar_ready.py --no-update --scanner-cache
+     "${XDG_CACHE_HOME:-$HOME/.cache}/code-health/sonar-scanner"` (run it in the background or
+     with the longest command timeout; it can wait minutes for Docker and the server).
+     `--no-update` keeps the server and its rules as they were for the whole cycle, so «before» and
+     «after» are measured by the same rules. Exit 1 — mark the item `failed`, end the cycle.
+   - Before the subagent edits: `SONAR_TOKEN="$(cat <token_file>)" python3
+     <plugin-root>/scripts/sonar_ratings.py --host <host> --project <project-key>` — the letter
+     of the project's last analysis is `rating_before`.
+   - After the gate passes: analyse the working tree into the same `<project-key>` with the
+     audit's settings and quality profile (`<plugin-root>/references/sonar.md`, step 4 of the
+     audit), wait for the CE task, run `sonar_ratings.py` again — `rating_after`. Another project
+     key would be analysed with another profile and could change the letter by itself; the next
+     audit re-analyses `HEAD` anyway.
+   Record `rating_before`/`rating_after` on the queue item and report them. A letter that did not
+   reach `to` is said plainly with the issues still in `driven_by`; it does not fail the item when
+   the group's own issues are gone.
 6. **Commit on a pass.** Stage only the exact paths the subagent touched for this group — never
    `git add -A`, never `git commit -a` (see "One deliberate reversal of v0.2.0" above). This is the
    **backstop** for a path outside the group's declared file list — one item 0's comparison could

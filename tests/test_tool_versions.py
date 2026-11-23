@@ -398,7 +398,7 @@ class VultureVersionRobustnessTests(unittest.TestCase):
         (root / "m.py").write_text("import os\n", encoding="utf-8")
         inv = D.enumerate_files(root, C.load_config(root))
         original = EX._run
-        EX._run = lambda argv, timeout=None, cwd=None: proc
+        EX._run = lambda argv, timeout=None, cwd=None, env=None: proc
         try:
             return EX.run_dead(root, inv, {"vulture": {"available": True, "bin": "vulture"}})
         finally:

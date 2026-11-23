@@ -29,6 +29,9 @@ class FakeApi:
             return {"component": {"measures": [{"metric": k, "value": v}
                                                for k, v in self.measures.items()]}}
         if path == "/api/issues/search":
+            # SonarQube answers 400 past the 10 000th result.
+            assert params["p"] * params["ps"] <= 10000, "past the search limit"
+            assert params["components"] == P and "componentKeys" not in params
             q = params["impactSoftwareQualities"]
             rows = [i for i in self.issues
                     if any(x["softwareQuality"] == q for x in i["impacts"])]
@@ -79,6 +82,11 @@ class IssueRatingTests(unittest.TestCase):
         many = [issue("k%d" % i, "RELIABILITY", "BLOCKER") for i in range(1203)]
         r = rating(R.explain(FakeApi({}, many), P), "reliability")
         self.assertEqual(len(r["driven_by"]["issues"]), 1203)
+
+    def test_more_issues_than_search_returns_stops_at_the_limit(self):
+        many = [issue("k%d" % i, "RELIABILITY", "BLOCKER") for i in range(10300)]
+        r = rating(R.explain(FakeApi({}, many), P), "reliability")
+        self.assertEqual(len(r["driven_by"]["issues"]), 10000)
 
 
 class DebtAndReviewTests(unittest.TestCase):

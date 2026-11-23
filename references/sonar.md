@@ -11,28 +11,30 @@ measuring; do not repeat its steps by hand.
 1. **Docker.** `docker info` must succeed. On macOS a stopped Docker Desktop is started with
    `open -a Docker` and awaited (180 s). Docker Desktop, Colima, OrbStack or any other runtime is
    never installed: a missing `docker` CLI stops the audit.
-2. **Discovery.** `docker ps -a`; any container whose image is `sonarqube` is reused when running
-   and started when stopped, whatever its name. Only when none exists a new one is created:
-
-```bash
-docker run -d --name sonarqube -p 9000:9000 -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true \
-  -v sonarqube_data:/opt/sonarqube/data \
-  -v sonarqube_extensions:/opt/sonarqube/extensions \
-  -v sonarqube_logs:/opt/sonarqube/logs \
-  sonarqube:community
-```
-
-   The embedded database is fine for this personal local use; it is not a production deployment.
-3. **Latest version.** `docker pull sonarqube:community` every audit. A container on an older image
-   is recreated on the new one with the same volumes. The data volume is copied to
-   `code-health-sonarqube-data-backup` first; when the server reports `DB_MIGRATION_NEEDED` the
-   script calls `POST /api/system/migrate_db`; a server that ends `DOWN` gets the copy restored and
-   the previous image back, and the report says the upgrade failed. A container configured with an
-   external database (`SONAR_JDBC_URL`) is never recreated. A failed pull keeps the installed image.
-4. **Readiness.** `/api/system/status` must reach `UP` (300 s), otherwise stop with
+2. **The plugin's server runs on PostgreSQL.** SonarQube's embedded H2 database cannot be
+   upgraded: on a newer image the server stays in `DB_MIGRATION_NEEDED` and
+   `POST /api/system/migrate_db` answers `NOT_SUPPORTED — Upgrade is not supported on embedded
+   database` (seen on 26.11). Keeping the server at the latest release therefore needs a real
+   database. The script runs, on the Docker network `code-health-sonar`:
+   - `code-health-sonar-db` — `postgres:17-alpine` (major pinned: a major PostgreSQL upgrade needs
+     a dump and restore), volume `code-health-sonar-pgdata`;
+   - `code-health-sonarqube` — `sonarqube:community`, port 9000, volumes
+     `code-health-sonarqube-data|extensions|logs`.
+   The database password is generated once into `~/.config/code-health/db_password` and reaches
+   the containers through `--env-file` files there (mode 600), never a command line.
+3. **Discovery.** The pair above is reused, started when stopped, created when missing. A user's
+   own SonarQube on an external database (`SONAR_JDBC_URL` set) is used as is and never upgraded.
+   Any other SonarQube container is an embedded-database one: it is stopped to free port 9000,
+   never removed — its volumes keep the old history.
+4. **Latest version.** `docker pull sonarqube:community` every audit. When the plugin's server runs
+   an older image: `pg_dump` into the database volume, recreate the server on the new image, call
+   `POST /api/system/migrate_db` when it reports `DB_MIGRATION_NEEDED`; a migration that ends
+   `DOWN` or is refused gets the dump restored and the previous image back, and the report says
+   the upgrade failed. A failed pull keeps the installed image.
+5. **Readiness.** `/api/system/status` must reach `UP` (300 s), otherwise stop with
    `docker logs --tail 200 <container>`.
-5. **Token** — below.
-6. **Scanner.** The newest native SonarScanner CLI (version from the GitHub releases API, archive
+6. **Token** — below.
+7. **Scanner.** The newest native SonarScanner CLI (version from the GitHub releases API, archive
    from `binaries.sonarsource.com`) for this platform, unpacked into
    `~/.cache/code-health/sonar-scanner/<version>/`. When the newest cannot be fetched, the newest
    cached one is used; with nothing cached the audit stops. The bundled language analyzers ship with
@@ -311,9 +313,11 @@ in the repository's Sonar configuration, a correct sources/tests/generated split
 paths), never `NOSONAR` in bulk, deleted tests, disabled rules without a reason, excluded real code
 or a false-positive mark in the UI.
 
-`/code-health:fix` re-checks a rating group's letter by analysing the working tree under the project
-key `<key>:fix` (Community Build has no branch analysis) bound to the same quality profile with
-`add_project`, then running `sonar_ratings.py` on it.
+`/code-health:fix` re-checks a rating group's letter on the same project key, with the server held
+at its version (`sonar_ready.py --no-update`): `sonar_ratings.py` before the edit gives the letter
+of the last analysis, an analysis of the working tree after the gate gives the new one. Same key,
+same profile, same rules — a letter that moves says something about the code. Community Build has
+no branch analysis; the next audit re-analyses `HEAD` and overwrites the working-tree result.
 
 ## Freshness
 

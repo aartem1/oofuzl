@@ -215,7 +215,9 @@ to the latest stable release before measuring:
   `null`), `previous_version` (before this run), `updated` (the version changed in this run; a fresh
   install is `installed_by_us`, not `updated`) and `update_error` (one line or `null`). A PATH binary
   that shadows the one just installed shows up as `update_error`, not as a silent success.
-- `--history` lines carry `tools: {name: version}`. The next audit compares them with its own tools
+- History lines carry `tools: {name: version}`, including the SonarQube server and scanner passed
+  with `--tool NAME=VERSION`. The audit compares with `--compare-history` and appends its line with
+  `--record-history FILE --from <measure.json>` only after Sonar succeeded. The next audit compares them with its own tools
   and `--brief` adds `tool_changes` and a one-line `tool_changes_note` ("Инструменты обновились с
   прошлого аудита: lizard 1.23.0 → …") when something moved, so a metric jump after an upgrade is
   not read as a change in the code.

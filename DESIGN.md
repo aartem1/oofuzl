@@ -70,9 +70,11 @@ stdlib-only.
 Up to 0.6.0 the audit ran without Sonar and printed a table of rows it could not measure. In
 practice that report was not worth reading: reliability, security, coverage, maintainability rating
 and cognitive complexity exist only in L1, and P0 is defined by that evidence. Since 0.7.0
-`scripts/sonar_ready.py` starts Docker (macOS), pulls the newest SonarQube Community Build, reuses,
-starts, creates or upgrades the container on persistent volumes (data copied first, restored on a
-failed migration), mints a token when none is valid, and fetches the newest native scanner. Any
+`scripts/sonar_ready.py` starts Docker (macOS), pulls the newest SonarQube Community Build and runs
+it on PostgreSQL — the embedded H2 database refuses upgrades (`migrate_db` → `NOT_SUPPORTED`), found
+on the first real run. It reuses, starts, creates or upgrades that pair on persistent volumes
+(database dumped first, restored on a failed migration), mints a token when none is valid, and
+fetches the newest native scanner. Any
 failure stops the audit with the reason and one fix command; Docker itself is never installed.
 
 Ratings are explained, not just shown: `scripts/sonar_ratings.py` lists the issues that set each

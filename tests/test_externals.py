@@ -86,6 +86,20 @@ class GracefulAbsenceTests(unittest.TestCase):
         self.assertEqual(out["status"], "partial")
         self.assertIn("vulture", out["reason"])
 
+    def test_a_python_warning_is_not_a_file_vulture_could_not_analyze(self):
+        # Python prints SyntaxWarning for an invalid escape in a docstring;
+        # vulture still analyzes the file. The warning on stderr marked the
+        # layer partial on jira-team-analytics.
+        root = Path(tempfile.mkdtemp())
+        (root / "w.py").write_text('def f():\n    "a \\ b"\n    return 1\n\n\nf()\n',
+                                   encoding="utf-8")
+        cfg = C.load_config(root)
+        inv = D.enumerate_files(root, cfg)
+        state = EX.probe("vulture")
+        if not state["available"]:
+            self.skipTest("vulture not installed")
+        out = EX.run_dead(root, inv, {"vulture": state, "knip": self.ABSENT})
+        self.assertEqual(out["status"], "measured", out.get("reason"))
 
     def test_a_real_vulture_reports_the_dead_code_it_finds(self):
         # vulture 2.x exits 3 when it finds dead code. Only 0 and 1 were

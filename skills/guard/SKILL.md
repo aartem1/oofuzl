@@ -185,6 +185,12 @@ With confirmation, in this exact order:
 python .code-health/guard.py --check --repo .
 ```
 
+`guard.py` takes lizard from `PATH`, and `audit` keeps that one at the latest release. When
+`lizard --version` is not the pinned version, prefix the command (here and in section 5) with
+`CODE_HEALTH_LIZARD=<the pinned copy from section 3>/bin/lizard`, creating that copy as section 3
+shows if it is missing. Otherwise `check` reports drift on untouched code and `update-baseline`
+writes a baseline the hook then enforces with another lizard.
+
 The same comparison as the hook, run by hand, installing nothing. `--check` covers
 `git diff --name-only HEAD` **plus** `git ls-files --others --exclude-standard`, because untracked
 files are exactly the new-entity case (rule 1) that `git diff` alone does not list.
@@ -198,7 +204,8 @@ about since pre-commit only ever passes files it already tracks as part of the c
 ## 5. `update-baseline`
 
 Re-measure via the vendored `.code-health/guard.py` (never the plugin's own copy — see "One
-measurement path" below) and rewrite `.code-health/baseline.json`:
+measurement path" below) and rewrite `.code-health/baseline.json`, with the pinned lizard as
+section 4 says:
 
 ```bash
 python .code-health/guard.py --baseline .code-health/baseline.json --repo .

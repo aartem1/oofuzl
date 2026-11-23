@@ -134,6 +134,29 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(rows[1]["counts"], {})
         self.assertEqual([r["loc"] for r in rows], [900, 300])
 
+    def test_line_is_recorded_only_after_the_audit_succeeded(self):
+        # The audit compares with the previous run before Sonar is analysed,
+        # but appends its own line only once the report exists: a run that
+        # stopped on Sonar must not become the next audit's baseline.
+        root = Path(tempfile.mkdtemp())
+        (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+        tmp = Path(tempfile.mkdtemp())
+        history, out = tmp / "history.jsonl", tmp / "measure.json"
+        history.write_text(json.dumps({"tools": {"sonarqube": "26.8"}}) + "\n", encoding="utf-8")
+        brief = run_measure(root, "--layers", "size", "--out", str(out), "--brief", "1",
+                            "--compare-history", str(history),
+                            "--tool", "sonarqube=26.11", "--tool", "sonar-scanner=8.5")
+        self.assertEqual(brief["tool_changes"],
+                         [{"tool": "sonarqube", "before": "26.8", "after": "26.11"}])
+        self.assertEqual(len(history.read_text().splitlines()), 1)
+        run_measure(root, "--record-history", str(history), "--from", str(out),
+                    "--tool", "sonarqube=26.11", "--tool", "sonar-scanner=8.5")
+        rows = [json.loads(line) for line in history.read_text().splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["tools"]["sonarqube"], "26.11")
+        self.assertEqual(rows[1]["tools"]["sonar-scanner"], "8.5")
+        self.assertEqual(rows[1]["loc"], 1)
+
 
 class LayerStatusContractTests(unittest.TestCase):
     """One assertion, three defects. Before the honest-degradation fixes this

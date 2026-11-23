@@ -21,7 +21,7 @@ Sonar with `hard - 1` to reconcile the one-line off-by-one in exactly one place.
 | Tokens in a file | `file_tokens` | 8000 | 15000 | L2, direct file read + `chars_per_token` | Estimated LLM token cost of a file | This is the metric line count is a proxy for. A file can be short in lines and still expensive (long lines, dense syntax) or long in lines and still cheap; `file_tokens` is what actually decides whether the file fits a context budget. |
 | Lines in a function | `function_lines` | 60 | 100 | L2 `lizard -ENS --csv` | Lizard's own `length` field per function | A function longer than a screenful forces the agent to hold more state in its own attention while reasoning about one unit of behavior. |
 | Cyclomatic complexity | `function_ccn` | 15 | 25 | L2 `lizard -ENS --csv` | McCabe cyclomatic complexity: count of independent linear paths through a function | More branches to trace means more paths the agent must consider correct simultaneously when changing the function; a wrong guess about one branch is a silent regression in another. |
-| Cognitive complexity | `function_cognitive` | 15 | 25 | L1 Sonar only (`S3776`) | Sonar's own measure of how hard a human finds a function to read, distinct from cyclomatic complexity (nesting and boolean-operator chains are weighted, straight-line branching is not) | Not measured without Sonar — CCN is reported instead, and labelled as CCN, never silently substituted for cognitive complexity under the same name. |
+| Cognitive complexity | `function_cognitive` | 15 | 25 | L1 Sonar only (`S3776`) | Sonar's own measure of how hard a human finds a function to read, distinct from cyclomatic complexity (nesting and boolean-operator chains are weighted, straight-line branching is not) | Cognitive complexity comes only from Sonar, which the audit requires; CCN is reported next to it under its own name, never substituted for it. |
 | Parameters | `parameters` | 5 | 8 | L2 `lizard -ENS --csv` | Count of a function's declared parameters; in JS/TS a destructured object or array (`({ title, text }: Props)`) is one parameter, not one per field | A high parameter count is usually one implicit "context object" spread across positional arguments; the agent has to reconstruct that shape from every call site instead of reading it in one place. |
 | Nesting depth | `nesting` | 3 | 4 | L2, own `ast` pass (`pyast.measure_nesting`) for Python, `None` ("not measured") for every other language | The deepest chain of nested blocks (`if`/`elif`/`else`, `for`, `while`, `with`, `try`/`except`/`finally`, `match`/`case`) enclosing a statement in a function | Deep nesting means the condition under which a given line executes is the conjunction of everything above it; the agent has to hold the whole stack of conditions in mind to reason about one line. |
 
@@ -31,9 +31,9 @@ These are two different metrics on two different scales, reported under their ow
 conflated. `lizard` reports *cyclomatic* complexity (CCN): the number of independent paths through
 a function's control-flow graph. *Cognitive* complexity (Sonar's `S3776`) exists only in L1: it
 weights nesting and boolean-operator chains more heavily than straight-line branching, on the theory
-that those cost a human reader more than an equivalent flat `if`/`elif` chain does. Without Sonar,
-L2 never claims to report cognitive complexity — the scorecard says `not measured` for that row and
-reports CCN separately, labelled as CCN.
+that those cost a human reader more than an equivalent flat `if`/`elif` chain does. L2 never claims
+to report cognitive complexity; the audit does not run without Sonar, so the row always comes from
+`S3776`, and CCN is reported separately, labelled as CCN.
 
 ### Nesting is not a single-source metric
 

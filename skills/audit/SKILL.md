@@ -66,21 +66,32 @@ python3 <plugin-root>/scripts/sonar_ready.py --scanner-cache "${XDG_CACHE_HOME:-
   > <tmp>/sonar.json
 ```
 
+Run it in the background, or with the longest command timeout the harness allows, and wait for
+it: starting Docker, pulling the image and an upgrade with migration can take several minutes. Do
+not kill it midway — an upgrade cut short is recovered by the next run (the database is saved
+before the server is recreated), but this audit has nothing to measure until it ends.
+
 It does, in order, and prints one JSON document without secrets:
 
 1. Docker: no `docker` CLI — stop (it never installs Docker). Daemon not answering — on macOS
    `open -a Docker` and a bounded wait (180 s); elsewhere stop with the start command.
-2. SonarQube: pulls the newest `sonarqube:community`; reuses a healthy container (any name),
-   starts a stopped one, otherwise creates one with the persistent volumes
-   `sonarqube_data|extensions|logs`; waits for `UP` (300 s). A container on an older image is
-   recreated on the new one with the same volumes after copying the data volume; the database
-   migration runs when the server asks for it, and a failed migration restores the copy and the
-   previous version. A failed pull keeps the installed version.
+2. SonarQube: pulls the newest `sonarqube:community` and runs it as `code-health-sonarqube` on
+   PostgreSQL (`code-health-sonar-db`), both on persistent volumes — the embedded H2 database
+   cannot be upgraded, so a server kept at the latest release needs a real one. Reuses or starts
+   that pair, creates it when missing, waits for `UP` (300 s). On a newer image it dumps the
+   database, recreates the server, runs the migration the server asks for, and on a failed
+   migration restores the dump and the previous image. A user's own SonarQube on an external
+   database is used as is; an old embedded-database container is stopped, never deleted. A failed
+   pull keeps the installed version.
 3. Token: `SONAR_TOKEN`, else `~/.config/code-health/sonar-token`, else the older
    `~/.config/sonar-code-health/token`, each checked against the server. None valid — a fresh server
    (`admin:admin`) gets a random admin password and a new token, both saved with mode 600 under
    `~/.config/code-health/`; a stored admin password mints a new token.
 4. Scanner: the newest native SonarScanner CLI for this platform, cached outside any repository.
+
+`SONAR_HOST_URL` set to a server other than localhost is someone else's server: the script only
+checks that it is `UP` and that a token works — no Docker, no upgrade, no admin password, no token
+minting. Writes to it (project, profile) still need the user's confirmation (hard rules).
 
 Exit 0: keep `host`, `container`, `version`, `token_file` (null when the token came from
 `SONAR_TOKEN`), `scanner`, `scanner_version`, `actions`, `notes`. Use the token only as
@@ -98,12 +109,16 @@ repo even if gitignored):
 
 ```bash
 python3 <plugin-root>/scripts/measure.py --repo <repo> --update-tools --out <tmp>/measure.json \
-  --brief 10 --history "${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.history.jsonl"
+  --brief 10 --compare-history "${XDG_STATE_HOME:-$HOME/.local/state}/code-health/<project-key>.history.jsonl" \
+  --tool sonarqube=<version> --tool sonar-scanner=<scanner_version>
 ```
 
-`--history` appends one line per audit (date, `HEAD`, size totals, layer statuses, findings per kind
-and level) next to the ledger. When the file already has earlier lines, say in one sentence how the
-counts moved since the previous audit.
+`--compare-history` reads the previous audit's line in the history file next to the ledger (date,
+`HEAD`, size totals, layer statuses, findings per kind and level, tool versions) and appends
+nothing; this run's line is appended in step 9, once the Sonar analysis succeeded, so an audit that
+stopped never becomes the next one's baseline. `--tool` passes the SonarQube server and scanner
+versions from step 2, so a server upgrade is named next to the local tools. When the file already
+has earlier lines, say in one sentence how the counts moved since the previous audit.
 
 `--brief 10` prints a short document to stdout: tools, layer statuses, `summary`, `counts` (findings
 per kind and level) and the ten worst findings of each kind (`hard` first, then the largest value).
@@ -308,6 +323,9 @@ locator-not-source-of-truth rules; do not restate the schema from memory.
   See "Carrying the queue across an audit" in `<plugin-root>/references/ledger.md`.
 - Store only locators (paths, function names, finding/issue/rule ids, metric values) — never
   source snippets, secrets, or raw API dumps.
+- Append this run's history line:
+  `python3 <plugin-root>/scripts/measure.py --record-history <the history file from step 3> --from
+  <tmp>/measure.json --tool sonarqube=<version> --tool sonar-scanner=<scanner_version>`.
 - Record in `audit.tools` the exact version of every measuring tool, the SonarQube server and the
   scanner, and in `audit.ratings` the letter of each Sonar rating. A rating group carries
   `rating: {metric, from, to}` so `/code-health:fix` re-checks that letter after the change.

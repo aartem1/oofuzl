@@ -47,7 +47,7 @@ def repo_facts(repo_root):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(prog="measure.py")
-    parser.add_argument("--repo", required=True)
+    parser.add_argument("--repo")
     parser.add_argument("--config")
     parser.add_argument("--layers", default=",".join(F.LAYER_NAMES))
     parser.add_argument("--files", nargs="*")
@@ -58,7 +58,17 @@ def parse_args(argv=None):
                              "the pinned versions stay the fallback when the registry fails")
     parser.add_argument("--out")
     parser.add_argument("--history", metavar="FILE",
-                        help="append one JSON line with this run's totals to FILE")
+                        help="compare with the last line of FILE, then append this run's line")
+    parser.add_argument("--compare-history", metavar="FILE",
+                        help="compare with the last line of FILE without appending; the audit "
+                             "appends with --record-history once its report exists")
+    parser.add_argument("--record-history", metavar="FILE",
+                        help="append the line of the document given by --from to FILE and exit")
+    parser.add_argument("--from", dest="from_doc", metavar="JSON",
+                        help="a document written earlier with --out (for --record-history)")
+    parser.add_argument("--tool", action="append", default=[], metavar="NAME=VERSION",
+                        help="a tool measured outside this script (the SonarQube server, the "
+                             "scanner): compared with the history and recorded in its line")
     parser.add_argument("--brief", type=int, metavar="N",
                         help="print totals by kind and the N worst findings of each kind; "
                              "the full document still goes to --out")
@@ -148,7 +158,7 @@ def brief(doc, per_kind):
     }
 
 
-def history_line(doc):
+def history_line(doc, extra_tools=None):
     """One audit as one line: enough to answer "did it get better over a
     year" without keeping every full report."""
     summary = doc["summary"]
@@ -160,9 +170,23 @@ def history_line(doc):
         "counts": brief(doc, 0)["counts"],
         # Versions of the tools that measured this run: the next audit tells a
         # tool upgrade from a change in the code by comparing them.
-        "tools": {name: state["version"] for name, state in sorted(doc["tools"].items())
-                  if state.get("available") and state.get("version")},
+        "tools": dict(_versions(doc), **(extra_tools or {})),
     }
+
+
+def _versions(doc):
+    return {name: state["version"] for name, state in sorted(doc["tools"].items())
+            if state.get("available") and state.get("version")}
+
+
+def _extra_tools(pairs):
+    out = {}
+    for pair in pairs:
+        name, sep, version = pair.partition("=")
+        if not sep or not name or not version:
+            raise ValueError("--tool expects NAME=VERSION: %s" % pair)
+        out[name] = version
+    return out
 
 
 def last_history_line(path):
@@ -182,7 +206,7 @@ def last_history_line(path):
     return row if isinstance(row, dict) else None
 
 
-def tool_changes(prev_line, doc):
+def tool_changes(prev_line, doc, extra_tools=None):
     """`[{tool, before, after}]` for every tool whose version differs from the
     previous audit's history line. A tool unknown on either side is not a
     change."""
@@ -190,8 +214,7 @@ def tool_changes(prev_line, doc):
     if not isinstance(before, dict):
         return []
     changes = []
-    for name, state in sorted(doc["tools"].items()):
-        now = state.get("version") if state.get("available") else None
+    for name, now in sorted(dict(_versions(doc), **(extra_tools or {})).items()):
         was = before.get(name)
         if now and was and now != was:
             changes.append({"tool": name, "before": was, "after": now})
@@ -236,20 +259,35 @@ def _merge_js_imports(imports_layer, js):
     return imports_layer
 
 
+def _append_history(path, doc, extra):
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(history_line(doc, extra), ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def main(argv=None):
     args = parse_args(argv)
     try:
+        extra = _extra_tools(args.tool)
+        if args.record_history:
+            if not args.from_doc:
+                raise ValueError("--record-history needs --from <document>")
+            _append_history(args.record_history,
+                            json.loads(Path(args.from_doc).read_text(encoding="utf-8")), extra)
+            sys.stdout.write(json.dumps({"recorded": args.record_history}) + "\n")
+            return 0
+        if not args.repo:
+            raise ValueError("--repo is required")
         doc = build_document(args)
-    except (C.ConfigError, ValueError) as exc:
+    except (C.ConfigError, ValueError, OSError) as exc:
         sys.stderr.write("error: %s\n" % exc)
         return 2
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
-    changes = tool_changes(last_history_line(args.history), doc) if args.history else []
+    compare = args.history or args.compare_history
+    changes = tool_changes(last_history_line(compare), doc, extra) if compare else []
     if args.history:
-        with open(args.history, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(history_line(doc), ensure_ascii=False, sort_keys=True) + "\n")
+        _append_history(args.history, doc, extra)
     if args.brief is not None:
         summary = brief(doc, args.brief)
         if changes:
