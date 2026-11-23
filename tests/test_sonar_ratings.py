@@ -35,7 +35,8 @@ class FakeApi:
             assert params["components"] == P and "componentKeys" not in params
             q, sev = params["impactSoftwareQualities"], params["impactSeverities"]
             if self.no_blocker and sev == "BLOCKER":
-                raise RuntimeError("Sonar API /api/issues/search ответил 400")
+                raise RuntimeError(getattr(self, "blocker_error",
+                                           "Sonar API /api/issues/search ответил 400"))
             rows = [i for i in self.issues
                     if any(x["softwareQuality"] == q and x["severity"] == sev
                            for x in i["impacts"])]
@@ -103,6 +104,12 @@ class IssueRatingTests(unittest.TestCase):
         api = FakeApi({}, [issue("h1", "RELIABILITY", "HIGH")], no_blocker=True)
         r = rating(R.explain(api, P), "reliability")
         self.assertEqual((r["computed_letter"], r["counts"]["BLOCKER"]), ("D", 0))
+
+    def test_other_failures_on_blocker_are_not_read_as_zero(self):
+        api = FakeApi({}, [issue("h1", "RELIABILITY", "HIGH")], no_blocker=True)
+        api.blocker_error = "Sonar API /api/issues/search ответил 503"
+        with self.assertRaises(RuntimeError):
+            R.explain(api, P)
 
     def test_more_worst_issues_than_search_returns_is_marked_truncated(self):
         many = [issue("k%d" % i, "RELIABILITY", "BLOCKER") for i in range(10300)]

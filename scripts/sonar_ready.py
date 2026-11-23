@@ -452,16 +452,17 @@ def _dump(env):
                     % (tmp, BACKUP_DUMP, BACKUP_DUMP, prev, tmp, BACKUP_DUMP)])[0] == 0
 
 
-def _rollback(env, host, wait, old_image, sonar_env, config_dir):
+def _rollback(env, host, wait, old_image, sonar_env, config_dir, restore=True):
     """Restore the dump and bring the old image back. A failed restore is
-    remembered: the next run starts nothing, so the copy survives."""
+    remembered: the next run starts nothing, so the copy survives. Without
+    `restore` the new server never ran, so the database is untouched."""
     if not _image_id(env, old_image):
         raise NotReady("Обновление SonarQube прервано, а образ прежней версии (%s) удалён: "
                        "откатываться не на что. Копия базы цела." % old_image,
                        "docker pull <прежняя версия sonarqube> && docker tag <она> %s  "
                        "# либо верните базу вручную и удалите %s" % (old_image, config_dir / MARKER))
     _remove_sonar(env)
-    if env.run(["docker", "exec", DB_NAME, "sh", "-c", RESTORE])[0] != 0:
+    if restore and env.run(["docker", "exec", DB_NAME, "sh", "-c", RESTORE])[0] != 0:
         _set_marker(config_dir, {"phase": "restore_failed", "old_image": old_image})
         raise NotReady("Обновление SonarQube не прошло, и базу не удалось вернуть из копии. "
                        "Сервер не запущен, копия цела.", _restore_fix(config_dir))
@@ -497,8 +498,9 @@ def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, c
         _remove_sonar(env)
         _run_sonar(env, IMAGE, sonar_env)
     except NotReady as failed:
-        # The new version never ran: it is not marked failed.
-        _rollback(env, host, wait, ROLLBACK_TAG, sonar_env, config_dir)
+        # The new version never ran: the database is as it was, and the
+        # version is not marked failed.
+        _rollback(env, host, wait, ROLLBACK_TAG, sonar_env, config_dir, restore=False)
         notes.append("Новую версию SonarQube не удалось запустить (%s); вернул прежнюю."
                      % failed.reason)
         return
@@ -581,17 +583,27 @@ def ensure_sonar(env, host, wait, actions, notes, config_dir, update=True):
         if any(r.get("Names") == DB_NAME for r in rows) and not _dump(env):
             raise NotReady("Не удалось сохранить копию базы SonarQube перед запуском сервера.",
                            "docker logs --tail 200 %s" % DB_NAME)
-        image = IMAGE
-        if image_id and _read(config_dir / FAILED_IMAGE) == image_id and _image_id(env, ROLLBACK_TAG):
-            # The base was restored by hand after a failed upgrade: start the
-            # version it belongs to, not the one that failed on it.
-            image = ROLLBACK_TAG
-            notes.append("Запускаю прежнюю версию SonarQube: новая на этой базе уже не поднималась.")
+        image, migrate = IMAGE, True
+        has_db = any(r.get("Names") == DB_NAME for r in rows)
+        if has_db and _image_id(env, ROLLBACK_TAG):
+            # The rollback tag lives only through an unfinished or failed
+            # upgrade: the database was restored by hand and belongs to the
+            # previous version. The next run upgrades it the safe way.
+            image, migrate = ROLLBACK_TAG, False
+            notes.append("Запускаю прежнюю версию SonarQube: база осталась от неё после "
+                         "неудачного обновления.")
+        elif has_db and image_id and _read(config_dir / FAILED_IMAGE) == image_id:
+            raise NotReady("База SonarQube осталась после неудачного обновления, а образа "
+                           "прежней версии нет: запуск новой снова упадёт.",
+                           "docker pull <прежняя версия sonarqube> && docker tag <она> %s  "
+                           "# затем повторите аудит" % ROLLBACK_TAG)
         _run_sonar(env, image, sonar_env)
         actions.append("container_created")
-    elif ours.get("State") != "running":
-        _start(env, NAME, actions)
-    _await_up(env, host, wait, NAME)
+        _await_up(env, host, wait, NAME, allow_migration=migrate)
+    else:
+        if ours.get("State") != "running":
+            _start(env, NAME, actions)
+        _await_up(env, host, wait, NAME)
 
     if ours is not None and update and image_id:
         current = _container_image_id(env, NAME)

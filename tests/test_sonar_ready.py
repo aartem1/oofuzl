@@ -124,6 +124,8 @@ class FakeMachine:
             c["State"], c["since"] = "running", self.t
             return 0, argv[2], ""
         if sub == "stop":
+            if argv[-1] not in self.containers:
+                return 1, "", "No such container: %s" % argv[-1]
             self.containers[argv[-1]]["State"] = "exited"
             return 0, argv[-1], ""
         if sub == "rm":
@@ -585,6 +587,60 @@ class RecoveryEdgeTests(Base):
         self.assertFalse((self.conf / SR.FAILED_IMAGE).exists())
         result = self.ready(m)  # tries the upgrade again
         self.assertIn("server_upgraded", result["actions"])
+
+    def kill_while_new_server_starts(self, m):
+        original = SR._await_up
+        calls = {"n": 0}
+
+        def killed(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise KeyboardInterrupt
+            return original(*args, **kwargs)
+        SR._await_up = killed
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.ready(m)
+        finally:
+            SR._await_up = original
+
+    def test_killed_upgrade_then_failed_restore_then_manual_restore_starts_the_old_version(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True)
+        self.kill_while_new_server_starts(m)
+        m.restore_fails = True
+        with self.assertRaises(SR.NotReady):
+            self.ready(m)
+        m.restore_fails, m.schema = False, "sha:old"
+        (self.conf / SR.MARKER).unlink()
+        self.assertEqual(self.ready(m)["status"], "ready")
+        self.assertEqual(m.containers[SR.NAME]["ImageId"], "sha:old")
+
+    def test_manual_restore_without_the_previous_image_stops_instead_of_retrying(self):
+        m = self.failed_restore()
+        m.restore_fails, m.schema = False, "sha:old"
+        (self.conf / SR.MARKER).unlink()
+        m.images.pop(SR.ROLLBACK_TAG)  # `docker image prune -a`
+        stop = self.stops(m)
+        self.assertIn(SR.ROLLBACK_TAG, stop.fix)
+        self.assertNotIn(SR.NAME, m.containers)
+
+    def test_new_image_that_could_not_start_leaves_the_database_alone(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new")
+        original = SR._run_sonar
+
+        def port_taken_once(env, image, sonar_env):
+            if image == SR.IMAGE:
+                raise SR.NotReady("Порт 9000 занят", "lsof")
+            return original(env, image, sonar_env)
+        SR._run_sonar = port_taken_once
+        try:
+            self.ready(m)
+        finally:
+            SR._run_sonar = original
+        self.assertEqual((m.restores, m.containers[SR.NAME]["ImageId"]), (0, "sha:old"))
+        self.assertFalse((self.conf / SR.FAILED_IMAGE).exists())
 
     def test_broken_marker_stops_with_a_reason_not_a_traceback(self):
         self.write_token()

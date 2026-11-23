@@ -34,8 +34,9 @@ measuring; do not repeat its steps by hand.
    `~/.config/code-health/upgrade.json` before the old server is removed: a run that died midway is
    rolled back by the next one; a failed restore stops every later run with the manual restore
    command and starts no server over the unrestored database. The previous image is tagged
-   `sonarqube:code-health-rollback` before the upgrade, so `docker image prune` cannot take the
-   rollback target away; the tag is dropped after a successful upgrade. An image that started but
+   `sonarqube:code-health-rollback` before the upgrade, so `docker image prune` without `-a`
+   cannot take the rollback target away; the tag is dropped after a successful upgrade, and while it
+   exists a missing server is recreated on it. The dump before it is kept as `….dump.prev`. An image that started but
    did not come up is not tried again (`upgrade-failed-image`; remove the file to retry); after a
    manual restore the server starts on the previous image. An interrupted run marks nothing failed.
    A damaged `upgrade.json` stops the run instead of being guessed at. A lock file serialises

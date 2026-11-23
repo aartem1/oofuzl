@@ -105,9 +105,10 @@ def _counts(api, project, quality):
     for severity in SEVERITY_ORDER:
         try:
             counts[severity] = _total(_search(api, project, quality, severity, 1, 1))
-        except RuntimeError:
-            # SonarQube 10.2-10.7 has no BLOCKER impact and answers 400.
-            if severity != "BLOCKER":
+        except RuntimeError as exc:
+            # SonarQube 10.2-10.7 has no BLOCKER impact and answers 400;
+            # any other failure is real.
+            if severity != "BLOCKER" or "ответил 400" not in str(exc):
                 raise
             counts[severity] = 0
     return counts
