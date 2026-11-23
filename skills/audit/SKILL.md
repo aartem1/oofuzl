@@ -68,8 +68,11 @@ python3 <plugin-root>/scripts/sonar_ready.py --scanner-cache "${XDG_CACHE_HOME:-
 
 Run it in the background, or with the longest command timeout the harness allows, and wait for
 it: starting Docker, pulling the image and an upgrade with migration can take several minutes. Do
-not kill it midway — an upgrade cut short is recovered by the next run (the database is saved
-before the server is recreated), but this audit has nothing to measure until it ends.
+not kill it midway. An upgrade cut short is rolled back by the next run (the database is dumped and
+the upgrade state written to `~/.config/code-health/upgrade.json` before the old server is
+removed); a failed restore makes every later run stop with the manual restore command instead of
+starting a server over the empty database. Only one preparation runs at a time (a lock file next
+to it), so a parallel audit or fix waits.
 
 It does, in order, and prints one JSON document without secrets:
 
@@ -90,8 +93,8 @@ It does, in order, and prints one JSON document without secrets:
 4. Scanner: the newest native SonarScanner CLI for this platform, cached outside any repository.
 
 `SONAR_HOST_URL` set to a server other than localhost is someone else's server: the script only
-checks that it is `UP` and that a token works — no Docker, no upgrade, no admin password, no token
-minting. Writes to it (project, profile) still need the user's confirmation (hard rules).
+checks that it is `UP` and that `SONAR_TOKEN` works — no Docker, no upgrade, no admin password, no
+token minting, and the local token files are never sent to it. Writes to it (project, profile) still need the user's confirmation (hard rules).
 
 Exit 0: keep `host`, `container`, `version`, `token_file` (null when the token came from
 `SONAR_TOKEN`), `scanner`, `scanner_version`, `actions`, `notes`. Use the token only as

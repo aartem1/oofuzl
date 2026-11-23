@@ -30,7 +30,11 @@ measuring; do not repeat its steps by hand.
    an older image: `pg_dump` into the database volume, recreate the server on the new image, call
    `POST /api/system/migrate_db` when it reports `DB_MIGRATION_NEEDED`; a migration that ends
    `DOWN` or is refused gets the dump restored and the previous image back, and the report says
-   the upgrade failed. A failed pull keeps the installed image.
+   the upgrade failed. A failed pull keeps the installed image. The upgrade state is written to
+   `~/.config/code-health/upgrade.json` before the old server is removed: a run that died midway is
+   rolled back by the next one; a failed restore stops every later run with the manual restore
+   command and starts no server over the unrestored database. An image that failed is not tried
+   again (`upgrade-failed-image`). A lock file serialises parallel runs.
 5. **Readiness.** `/api/system/status` must reach `UP` (300 s), otherwise stop with
    `docker logs --tail 200 <container>`.
 6. **Token** — below.

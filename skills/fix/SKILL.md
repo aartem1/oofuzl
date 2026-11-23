@@ -167,8 +167,9 @@ Repeat for each item in queue order until the queue is exhausted or the cycle st
      `--no-update` keeps the server and its rules as they were for the whole cycle, so «before» and
      «after» are measured by the same rules. Exit 1 — mark the item `failed`, end the cycle.
    - Before the subagent edits: `SONAR_TOKEN="$(cat <token_file>)" python3
-     <plugin-root>/scripts/sonar_ratings.py --host <host> --project <project-key>` — the letter
-     of the project's last analysis is `rating_before`.
+     <plugin-root>/scripts/sonar_ratings.py --host <host> --project <project-key>` (with
+     `token_file: null` the token is already in `SONAR_TOKEN`; drop the prefix) — the letter of
+     the project's last analysis is `rating_before`.
    - After the gate passes: analyse the working tree into the same `<project-key>` with the
      audit's settings and quality profile (`<plugin-root>/references/sonar.md`, step 4 of the
      audit), wait for the CE task, run `sonar_ratings.py` again — `rating_after`. Another project

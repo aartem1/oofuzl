@@ -25,6 +25,8 @@ the same two lines go to stderr in Russian for the person reading.
 """
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import platform as _platform
@@ -42,8 +44,9 @@ import zipfile
 from pathlib import Path
 
 IMAGE = "sonarqube:community"
-# Major PostgreSQL upgrades need a dump and restore, so the major is pinned;
-# minor releases arrive with the tag.
+# Major PostgreSQL upgrades need a dump and restore, so the major is pinned.
+# The image is pulled only when missing and the database container is never
+# recreated: PostgreSQL minor updates are not applied automatically.
 DB_IMAGE = "postgres:17-alpine"
 NAME = "code-health-sonarqube"
 DB_NAME = "code-health-sonar-db"
@@ -241,11 +244,21 @@ def _uses_external_db(env, name):
         return False
 
 
-def _env_files(config_dir):
+def _env_files(env, config_dir, rows):
     """Private env files for the database and the server. The password is
-    generated once and never passed on a command line."""
+    generated once and never passed on a command line. A database that
+    already exists keeps the password it was initialised with: a new one
+    would lock the server out of it."""
     password_file = config_dir / "db_password"
     password = _read(password_file)
+    if not password and _db_exists(env, rows):
+        password = _db_password_from_container(env)
+        if not password:
+            raise NotReady("Пароль базы SonarQube потерян (%s), а база уже есть: с новым паролем "
+                           "сервер к ней не подключится." % password_file,
+                           "верните файл %s или удалите контейнер %s и том %s, чтобы начать с "
+                           "пустой базы" % (password_file, DB_NAME, DB_VOLUME.split(":")[0]))
+        _write_private(password_file, password)
     if not password:
         password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
         _write_private(password_file, password)
@@ -255,6 +268,26 @@ def _env_files(config_dir):
                               "SONAR_JDBC_USERNAME=sonar\nSONAR_JDBC_PASSWORD=%s\n"
                               "SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true" % (DB_NAME, password))
     return db_env, sonar_env
+
+
+def _db_exists(env, rows):
+    if any(r.get("Names") == DB_NAME for r in rows):
+        return True
+    return env.run(["docker", "volume", "inspect", DB_VOLUME.split(":")[0]])[0] == 0
+
+
+def _db_password_from_container(env):
+    code, out, _ = env.run(["docker", "inspect", "--format", "{{json .Config.Env}}", DB_NAME])
+    if code != 0:
+        return None
+    try:
+        values = json.loads(out or "[]")
+    except ValueError:
+        return None
+    for value in values or []:
+        if str(value).startswith("POSTGRES_PASSWORD="):
+            return str(value).split("=", 1)[1] or None
+    return None
 
 
 def _ensure_network(env):
@@ -282,8 +315,11 @@ def _ensure_db(env, rows, db_env, actions):
         if code != 0:
             raise NotReady("База SonarQube не запускается: %s" % err.strip(),
                            "docker logs --tail 200 %s" % DB_NAME)
-    ready = _wait(env, 60, lambda: env.run(["docker", "exec", DB_NAME, "pg_isready", "-U",
-                                            "sonar", "-d", "sonar"])[0] == 0, step=2)
+    # Over TCP: while the image initialises a new database its temporary
+    # server listens on the socket only.
+    ready = _wait(env, 60, lambda: env.run(["docker", "exec", DB_NAME, "pg_isready", "-h",
+                                            "127.0.0.1", "-U", "sonar", "-d", "sonar"])[0] == 0,
+                  step=2)
     if not ready:
         raise NotReady("База SonarQube не ответила за 60 с.", "docker logs --tail 200 %s" % DB_NAME)
 
@@ -303,6 +339,13 @@ def _run_sonar(env, image, sonar_env):
                        "docker logs --tail 200 %s" % NAME)
 
 
+def _remove_sonar(env):
+    env.run(["docker", "stop", "-t", "60", NAME])
+    # -v: the image declares an anonymous temp volume; without it every
+    # upgrade leaves one behind.
+    env.run(["docker", "rm", "-v", NAME])
+
+
 def _await_up(env, host, wait, name, allow_migration=True):
     """Wait for UP; start the database migration when the server asks."""
     state = {"migrated": False, "refused": None}
@@ -310,7 +353,9 @@ def _await_up(env, host, wait, name, allow_migration=True):
     def check():
         status, _ = _status(env, host)
         if status == "DB_MIGRATION_NEEDED":
-            if not allow_migration or state["migrated"]:
+            if not allow_migration:
+                return "NEEDS_MIGRATION"
+            if state["migrated"]:
                 return None
             _, body = env.http("POST", host + "/api/system/migrate_db")
             answer = (body or {}).get("state") if isinstance(body, dict) else None
@@ -328,6 +373,9 @@ def _await_up(env, host, wait, name, allow_migration=True):
     if status == "REFUSED":
         raise NotReady("SonarQube не может обновить свою базу: %s" % state["refused"],
                        "docker logs --tail 200 %s" % name)
+    if status == "NEEDS_MIGRATION":
+        raise NotReady("SonarQube %s ждёт миграции базы, а обновлять этот сервер плагин не берётся."
+                       % name, "docker logs --tail 200 %s" % name)
     reason = ("SonarQube не поднялся: сервер в состоянии DOWN." if status == "DOWN"
               else "SonarQube не поднялся за %d с." % wait)
     raise NotReady(reason, "docker logs --tail 200 %s" % name)
@@ -348,36 +396,82 @@ def _pull(env, notes, actions):
     return after
 
 
+# Upgrade state lives next to the env files, so a run that died midway is
+# finished by the next one instead of being mistaken for a fresh start.
+MARKER = "upgrade.json"
+FAILED_IMAGE = "upgrade-failed-image"
+RESTORE = ("dropdb -U sonar sonar && createdb -U sonar -O sonar sonar && "
+           "pg_restore -U sonar -d sonar %s" % BACKUP_DUMP)
+
+
+def _marker(config_dir):
+    try:
+        value = json.loads((config_dir / MARKER).read_text())
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _set_marker(config_dir, value):
+    _write_private(config_dir / MARKER, json.dumps(value))
+
+
+def _clear_marker(config_dir):
+    try:
+        (config_dir / MARKER).unlink()
+    except OSError:
+        pass
+
+
 def _dump(env):
-    return env.run(["docker", "exec", DB_NAME, "pg_dump", "-U", "sonar", "-Fc", "-f",
-                    BACKUP_DUMP, "sonar"])[0] == 0
+    # Written aside and renamed on success: a dump that fails midway (a full
+    # disk) never replaces the previous good copy.
+    tmp = BACKUP_DUMP + ".partial"
+    return env.run(["docker", "exec", DB_NAME, "sh", "-c",
+                    "pg_dump -U sonar -Fc -f %s sonar && mv %s %s" % (tmp, tmp, BACKUP_DUMP)])[0] == 0
 
 
-def _upgrade(env, host, wait, old_image, sonar_env, actions, notes):
+def _rollback(env, host, wait, old_image, sonar_env, config_dir):
+    """Restore the dump and bring the old image back. A failed restore is
+    remembered: the next run starts nothing, so the copy survives."""
+    _remove_sonar(env)
+    if env.run(["docker", "exec", DB_NAME, "sh", "-c", RESTORE])[0] != 0:
+        _set_marker(config_dir, {"phase": "restore_failed", "old_image": old_image})
+        raise NotReady("Обновление SonarQube не прошло, и базу не удалось вернуть из копии. "
+                       "Сервер не запущен, копия цела.", _restore_fix(config_dir))
+    _run_sonar(env, old_image, sonar_env)
+    _await_up(env, host, wait, NAME, allow_migration=False)
+    _clear_marker(config_dir)
+
+
+def _restore_fix(config_dir):
+    return "docker exec %s sh -c '%s' && rm %s  # затем повторите аудит" % (
+        DB_NAME, RESTORE, config_dir / MARKER)
+
+
+def _upgrade(env, host, wait, old_image, new_image, sonar_env, actions, notes, config_dir):
     """Recreate the server on the new image. The database is dumped first; a
-    failed migration restores the dump and brings the old image back."""
+    failed migration restores the dump and brings the old image back, and
+    that image is not tried again."""
+    if _read(config_dir / FAILED_IMAGE) == new_image:
+        notes.append("Новая версия SonarQube уже не поднималась на этой базе; обновление не "
+                     "повторяю, работаю на прежней.")
+        return
     if not _dump(env):
         notes.append("Не удалось сохранить копию базы SonarQube, обновление сервера пропущено.")
         return
-    env.run(["docker", "stop", NAME])
-    env.run(["docker", "rm", NAME])
-    _run_sonar(env, IMAGE, sonar_env)
+    _set_marker(config_dir, {"phase": "upgrading", "old_image": old_image, "new_image": new_image})
     try:
+        _remove_sonar(env)
+        _run_sonar(env, IMAGE, sonar_env)
         migrated = _await_up(env, host, wait, NAME)
     except NotReady as failed:
-        env.run(["docker", "stop", NAME])
-        env.run(["docker", "rm", NAME])
-        restore = ("dropdb -U sonar sonar && createdb -U sonar -O sonar sonar && "
-                   "pg_restore -U sonar -d sonar %s" % BACKUP_DUMP)
-        if env.run(["docker", "exec", DB_NAME, "sh", "-c", restore])[0] != 0:
-            raise NotReady("Обновление SonarQube не прошло (%s), и базу не удалось вернуть из "
-                           "копии." % failed.reason,
-                           "docker exec %s sh -c '%s'" % (DB_NAME, restore))
-        _run_sonar(env, old_image, sonar_env)
-        _await_up(env, host, wait, NAME, allow_migration=False)
+        _rollback(env, host, wait, old_image, sonar_env, config_dir)
+        _write_private(config_dir / FAILED_IMAGE, new_image)
         notes.append("Новая версия SonarQube не поднялась (%s); вернул прежнюю с прежними данными."
                      % failed.reason)
         return
+    _clear_marker(config_dir)
     actions.append("server_upgraded")
     if migrated:
         actions.append("db_migrated")
@@ -395,34 +489,52 @@ def ensure_sonar(env, host, wait, actions, notes, config_dir, update=True):
     """The plugin's own server: SonarQube on PostgreSQL. The embedded H2
     database cannot be upgraded (`migrate_db` answers NOT_SUPPORTED), so a
     server that must stay on the latest release needs a real database."""
+    marker = _marker(config_dir)
+    if marker and marker.get("phase") == "restore_failed":
+        raise NotReady("Прошлое обновление SonarQube не удалось откатить: база не восстановлена "
+                       "из копии. Сервер не запускаю, чтобы не затереть копию.",
+                       _restore_fix(config_dir))
     image_id = _pull(env, notes, actions) if update else _image_id(env, IMAGE)
     rows = _containers(env)
     ours = next((r for r in rows if r.get("Names") == NAME), None)
     foreign = [r for r in rows if r.get("Names") not in (NAME, DB_NAME) and _is_sonar(env, r)]
+    external = [r for r in foreign if _uses_external_db(env, r["Names"])]
 
-    if ours is None:
-        external = [r for r in foreign if _uses_external_db(env, r["Names"])]
-        if external:
-            row = external[0]
-            if row.get("State") != "running":
-                _start(env, row["Names"], actions)
-            _await_up(env, host, wait, row["Names"], allow_migration=False)
-            notes.append("SonarQube %s на внешней базе: использую его, обновлять не берусь."
-                         % row["Names"])
-            return row["Names"], _status(env, host)[1]
+    if ours is None and external and not marker:
+        row = external[0]
+        if row.get("State") != "running":
+            _start(env, row["Names"], actions)
+        _await_up(env, host, wait, row["Names"], allow_migration=False)
+        notes.append("SonarQube %s на внешней базе: использую его, обновлять не берусь."
+                     % row["Names"])
+        return row["Names"], _status(env, host)[1]
 
     for row in foreign:
+        if row in external:
+            continue
         if row.get("State") == "running":
             env.run(["docker", "stop", row["Names"]])
             notes.append("Старый SonarQube %s на встроенной базе остановлен: её нельзя обновлять. "
                          "Контейнер и тома не тронуты." % row["Names"])
 
-    db_env, sonar_env = _env_files(config_dir)
+    db_env, sonar_env = _env_files(env, config_dir, rows)
     _ensure_network(env)
     _ensure_db(env, rows, db_env, actions)
+
+    if marker and marker.get("phase") == "upgrading":
+        # The previous run died between removing the old server and
+        # confirming the new one: finish its rollback.
+        _rollback(env, host, wait, marker["old_image"], sonar_env, config_dir)
+        if marker.get("new_image"):
+            _write_private(config_dir / FAILED_IMAGE, marker["new_image"])
+        notes.append("Прерванное прошлое обновление SonarQube откачено: вернул прежнюю версию и "
+                     "базу из копии.")
+        actions.append("upgrade_rolled_back")
+        return NAME, _status(env, host)[1]
+
     if ours is None:
-        # The database outlived the server (an upgrade cut short after
-        # `docker rm`): the new server may migrate it, so save it first.
+        # The database outlived the server: the new server may migrate it,
+        # so save it first.
         if any(r.get("Names") == DB_NAME for r in rows) and not _dump(env):
             raise NotReady("Не удалось сохранить копию базы SonarQube перед запуском сервера.",
                            "docker logs --tail 200 %s" % DB_NAME)
@@ -435,7 +547,7 @@ def ensure_sonar(env, host, wait, actions, notes, config_dir, update=True):
     if ours is not None and update and image_id:
         current = _container_image_id(env, NAME)
         if current and current != image_id:
-            _upgrade(env, host, wait, current, sonar_env, actions, notes)
+            _upgrade(env, host, wait, current, image_id, sonar_env, actions, notes, config_dir)
     return NAME, _status(env, host)[1]
 
 
@@ -461,6 +573,12 @@ def ensure_token(env, host, config_dir, legacy_dir, environ, actions, allow_admi
     token_file = config_dir / "sonar-token"
     if environ.get("SONAR_TOKEN") and _valid(env, host, token=environ["SONAR_TOKEN"]):
         return "env", None
+    if not allow_admin:
+        # The token files belong to the local server; sending them to
+        # someone else's server would hand them a secret.
+        raise NotReady("Для SonarQube %s нет действующего токена в SONAR_TOKEN." % host,
+                       "export SONAR_TOKEN=<токен этого сервера>  # из %s/account/security"
+                       % host)
     for path in (token_file, legacy_dir / "token"):
         value = _read(path)
         if value and _valid(env, host, token=value):
@@ -555,6 +673,35 @@ def ensure_scanner(env, cache, actions, notes):
 
 def ensure_ready(env, *, host, config_dir, legacy_dir, docker_wait, sonar_wait, environ,
                  scanner_cache=None, update=True):
+    with _lock(env, Path(config_dir), sonar_wait):
+        return _ensure_ready(env, host=host, config_dir=config_dir, legacy_dir=legacy_dir,
+                             docker_wait=docker_wait, sonar_wait=sonar_wait, environ=environ,
+                             scanner_cache=scanner_cache, update=update)
+
+
+@contextlib.contextmanager
+def _lock(env, config_dir, wait):
+    """One preparation at a time: two audits from two worktrees must not
+    create, upgrade or remove the same containers concurrently."""
+    config_dir.mkdir(parents=True, exist_ok=True)
+    with open(config_dir / "sonar.lock", "a") as fh:
+        def take():
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError:
+                return False
+        if not _wait(env, wait, take, step=2):
+            raise NotReady("Sonar сейчас готовит другой аудит или fix и не освободил его за %d с."
+                           % wait, "повторите аудит, когда закончится другой запуск")
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _ensure_ready(env, *, host, config_dir, legacy_dir, docker_wait, sonar_wait, environ,
+                  scanner_cache, update):
     actions, notes = [], []
     local = _is_local(host)
     if local:
@@ -608,6 +755,12 @@ def main_with(env, argv):
                            legacy_dir=args.legacy_dir, docker_wait=args.docker_wait,
                            sonar_wait=args.sonar_wait, environ=env.env,
                            scanner_cache=args.scanner_cache, update=not args.no_update)
+    except OSError as exc:
+        stop = NotReady("Не удалось записать файл настроек: %s." % exc,
+                        "проверьте права на %s" % args.config_dir)
+        doc = {"status": "failed", "reason": stop.reason, "fix": stop.fix}
+        err = "Sonar не готов, аудит остановлен: %s\nИсправить: %s\n" % (stop.reason, stop.fix)
+        return 1, json.dumps(doc, ensure_ascii=False, indent=2), err
     except NotReady as stop:
         doc = {"status": "failed", "reason": stop.reason, "fix": stop.fix}
         err = "Sonar не готов, аудит остановлен: %s\nИсправить: %s\n" % (stop.reason, stop.fix)

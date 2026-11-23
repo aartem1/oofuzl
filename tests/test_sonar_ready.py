@@ -36,7 +36,7 @@ class FakeMachine:
                  platform="darwin", containers=None, local="sha:old", registry="sha:old",
                  pull_fails=False, schema="sha:old", migration_fails=False, sonar_up_after=20,
                  port_taken=False, tokens_valid=(TOKEN,), admin_password="admin", env=None,
-                 dump_fails=False):
+                 dump_fails=False, restore_fails=False):
         self.docker, self.docker_running, self.can_open = docker, docker_running, can_open
         self.docker_up_after, self.platform, self.machine = docker_up_after, platform, "arm64"
         self.containers = {k: dict(v) for k, v in (containers or {}).items()}
@@ -45,7 +45,8 @@ class FakeMachine:
         self.schema, self.migration_fails, self.migrating = schema, migration_fails, False
         self.sonar_up_after, self.port_taken = sonar_up_after, port_taken
         self.tokens_valid, self.admin_password = set(tokens_valid), admin_password
-        self.env, self.dump_fails = dict(env or {}), dump_fails
+        self.env, self.dump_fails, self.restore_fails = dict(env or {}), dump_fails, restore_fails
+        self.sent_tokens = []
         self.networks, self.t, self.opened_at, self.timeouts = set(), 0.0, None, []
         self.calls, self.minted, self.downloads, self.dumps, self.restores = [], [], [], 0, 0
         for c in self.containers.values():
@@ -123,11 +124,13 @@ class FakeMachine:
             c["State"], c["since"] = "running", self.t
             return 0, argv[2], ""
         if sub == "stop":
-            self.containers[argv[2]]["State"] = "exited"
-            return 0, argv[2], ""
+            self.containers[argv[-1]]["State"] = "exited"
+            return 0, argv[-1], ""
         if sub == "rm":
-            self.containers.pop(argv[2], None)
-            return 0, argv[2], ""
+            self.containers.pop(argv[-1], None)
+            return 0, argv[-1], ""
+        if sub == "volume":
+            return 1, "", "no such volume"
         if sub == "run":
             return self._docker_run(argv)
         if sub == "exec":
@@ -154,13 +157,16 @@ class FakeMachine:
     def _exec(self, cmd):
         if cmd[0] == "pg_isready":
             return 0, "", ""
-        if cmd[0] == "pg_dump":
+        if cmd[:2] == ["sh", "-c"] and "pg_dump" in cmd[2]:
             if self.dump_fails:
                 return 1, "", "dump failed"
             self.dumps += 1
             self.dumped_schema = self.schema
             return 0, "", ""
         if cmd[:2] == ["sh", "-c"] and "pg_restore" in cmd[2]:
+            if self.restore_fails:
+                self.schema = None
+                return 1, "", "restore failed"
             self.restores += 1
             self.schema = self.dumped_schema
             return 0, "", ""
@@ -169,6 +175,8 @@ class FakeMachine:
     # sonar http
     def http(self, method, url, *, token=None, basic=None, form=None):
         self.calls.append([method, url])
+        if token:
+            self.sent_tokens.append((url, token))
         if url.startswith("https://api.github.com"):
             return 200, {"tag_name": "8.1.0.5000"}
         if not url.startswith(HOST):
@@ -231,7 +239,8 @@ PG_ENV = ["SONAR_JDBC_URL=jdbc:postgresql://code-health-sonar-db:5432/sonar"]
 def ours(state="running", image_id="sha:old"):
     return {SR.NAME: {"Image": "sonarqube:community", "ImageId": image_id, "State": state,
                       "Env": PG_ENV, "sonar": True},
-            SR.DB_NAME: {"Image": SR.DB_IMAGE, "ImageId": "pg", "State": state}}
+            SR.DB_NAME: {"Image": SR.DB_IMAGE, "ImageId": "pg", "State": state,
+                         "Env": ["POSTGRES_USER=sonar", "POSTGRES_PASSWORD=DbPass1"]}}
 
 
 def h2_legacy(state="running"):
@@ -367,7 +376,7 @@ class ServerTests(Base):
         m = FakeMachine(containers={SR.DB_NAME: ours()[SR.DB_NAME]}, registry="sha:new")
         self.ready(m)
         self.assertEqual(m.dumps, 1)
-        dump = next(i for i, c in enumerate(m.calls) if "pg_dump" in c)
+        dump = next(i for i, c in enumerate(m.calls) if "pg_dump" in " ".join(c))
         run = next(i for i, c in enumerate(m.calls) if c[:2] == ["docker", "run"])
         self.assertLess(dump, run)
 
@@ -384,8 +393,7 @@ class ServerTests(Base):
         # what happened on the real machine: new image over an H2 volume
         m = FakeMachine(containers={SR.NAME: {"Image": "sonarqube:community", "ImageId": "sha:new",
                                               "State": "running", "Env": [], "sonar": True},
-                                    SR.DB_NAME: {"Image": SR.DB_IMAGE, "ImageId": "pg",
-                                                 "State": "running"}},
+                                    SR.DB_NAME: ours()[SR.DB_NAME]},
                         local="sha:new", registry="sha:new", schema="sha:old")
         stop = self.stops(m)
         self.assertIn("embedded database", stop.reason)
@@ -437,6 +445,87 @@ class UpgradeTests(Base):
         self.assertIn("docker pull", self.stops(FakeMachine(local=None, pull_fails=True)).fix)
 
 
+class RecoveryTests(Base):
+    def test_failed_restore_leaves_a_marker_and_the_next_run_starts_nothing(self):
+        # A server started over an unrestored database would overwrite the
+        # only copy and come up empty.
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True,
+                        restore_fails=True)
+        with self.assertRaises(SR.NotReady):
+            self.ready(m)
+        dumps, runs = m.dumps, sum(1 for c in m.calls if c[:2] == ["docker", "run"])
+        stop = self.stops(m)
+        self.assertIn("pg_restore", stop.fix)
+        self.assertEqual(m.dumps, dumps)
+        self.assertEqual(sum(1 for c in m.calls if c[:2] == ["docker", "run"]), runs)
+
+    def test_upgrade_cut_short_is_rolled_back_by_the_next_run(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True)
+        original = SR._await_up
+        calls = {"n": 0}
+
+        def killed(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:  # the new image's wait: the process dies here
+                raise KeyboardInterrupt
+            return original(*args, **kwargs)
+        SR._await_up = killed
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.ready(m)
+        finally:
+            SR._await_up = original
+        result = self.ready(m)
+        self.assertEqual(m.restores, 1)
+        self.assertEqual(m.containers[SR.NAME]["ImageId"], "sha:old")
+        self.assertTrue(any("прерванное" in n.lower() for n in result["notes"]))
+
+    def test_an_image_that_failed_to_upgrade_is_not_retried(self):
+        self.write_token()
+        m = FakeMachine(containers=ours(), registry="sha:new", migration_fails=True)
+        self.ready(m)
+        dumps = m.dumps
+        result = self.ready(m)
+        self.assertEqual(m.dumps, dumps)
+        self.assertEqual(m.containers[SR.NAME]["ImageId"], "sha:old")
+        self.assertTrue(any("не повторяю" in n for n in result["notes"]))
+
+    def test_lost_database_password_is_recovered_from_the_database_container(self):
+        self.write_token()
+        containers = ours()
+        containers[SR.DB_NAME]["Env"] = ["POSTGRES_USER=sonar", "POSTGRES_PASSWORD=Kept0ldPass"]
+        m = FakeMachine(containers=containers)
+        self.ready(m)
+        self.assertEqual((self.conf / "db_password").read_text().strip(), "Kept0ldPass")
+        self.assertIn("Kept0ldPass", (self.conf / "sonar.env").read_text())
+
+    def test_lost_database_password_that_cannot_be_recovered_stops(self):
+        self.write_token()
+        containers = ours()
+        containers[SR.DB_NAME]["Env"] = []
+        stop = self.stops(FakeMachine(containers=containers))
+        self.assertIn("пароль", stop.reason.lower())
+
+    def test_users_external_server_is_not_stopped_next_to_ours(self):
+        self.write_token()
+        containers = ours()
+        containers["corp-sonar"] = {"Image": "sonarqube:2025-lts", "ImageId": "x",
+                                    "State": "running", "Env": PG_ENV}
+        m = FakeMachine(containers=containers)
+        self.ready(m)
+        self.assertEqual(m.containers["corp-sonar"]["State"], "running")
+
+    def test_a_second_run_waits_for_the_first_and_gives_up_with_a_reason(self):
+        import fcntl
+        self.conf.mkdir(parents=True, exist_ok=True)
+        with open(self.conf / "sonar.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            stop = self.stops(FakeMachine(containers=ours()))
+        self.assertIn("другой", stop.reason)
+
+
 class RemoteTests(Base):
     REMOTE = "https://sonar.example.com"
 
@@ -451,12 +540,20 @@ class RemoteTests(Base):
         self.assertFalse(any(c and c[0] == "docker" for c in m.calls))
         self.assertEqual(getattr(m, "remote_writes", []), [])
 
+    def test_local_token_files_are_never_sent_to_a_remote_server(self):
+        self.write_token()
+        m = FakeMachine(docker=False)
+        with self.assertRaises(SR.NotReady) as cm:
+            self.remote_ready(m)
+        self.assertEqual(m.sent_tokens, [])
+        self.assertIn("SONAR_TOKEN", cm.exception.fix)
+
     def test_remote_server_without_a_token_stops_instead_of_rotating_admin(self):
         m = FakeMachine(docker=False, tokens_valid=())
         with self.assertRaises(SR.NotReady) as cm:
             self.remote_ready(m)
         self.assertEqual(getattr(m, "remote_writes", []), [])
-        self.assertIn("sonar-token", cm.exception.fix)
+        self.assertIn("SONAR_TOKEN", cm.exception.fix)
 
 
 class TokenTests(Base):

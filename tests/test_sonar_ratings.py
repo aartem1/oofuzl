@@ -32,9 +32,10 @@ class FakeApi:
             # SonarQube answers 400 past the 10 000th result.
             assert params["p"] * params["ps"] <= 10000, "past the search limit"
             assert params["components"] == P and "componentKeys" not in params
-            q = params["impactSoftwareQualities"]
+            q, sev = params["impactSoftwareQualities"], params["impactSeverities"]
             rows = [i for i in self.issues
-                    if any(x["softwareQuality"] == q for x in i["impacts"])]
+                    if any(x["softwareQuality"] == q and x["severity"] == sev
+                           for x in i["impacts"])]
             start = (params["p"] - 1) * params["ps"]
             return {"issues": rows[start:start + params["ps"]], "paging": {"total": len(rows)}}
         if path == "/api/measures/component_tree":
@@ -83,10 +84,23 @@ class IssueRatingTests(unittest.TestCase):
         r = rating(R.explain(FakeApi({}, many), P), "reliability")
         self.assertEqual(len(r["driven_by"]["issues"]), 1203)
 
-    def test_more_issues_than_search_returns_stops_at_the_limit(self):
+    def test_a_blocker_behind_ten_thousand_lesser_issues_still_sets_the_letter(self):
+        # The search stops at 10 000 results; counting and fetching per
+        # severity keeps the letter and its drivers exact.
+        many = [issue("k%d" % i, "RELIABILITY", "LOW") for i in range(10300)]
+        many.append(issue("b1", "RELIABILITY", "BLOCKER"))
+        r = rating(R.explain(FakeApi({}, many), P), "reliability")
+        self.assertEqual(r["computed_letter"], "E")
+        self.assertEqual([i["key"] for i in r["driven_by"]["issues"]], ["b1"])
+        self.assertEqual(r["counts"]["LOW"], 10300)
+        self.assertEqual(r["next"]["letter"], "B")
+
+    def test_more_worst_issues_than_search_returns_is_marked_truncated(self):
         many = [issue("k%d" % i, "RELIABILITY", "BLOCKER") for i in range(10300)]
         r = rating(R.explain(FakeApi({}, many), P), "reliability")
         self.assertEqual(len(r["driven_by"]["issues"]), 10000)
+        self.assertTrue(r["driven_by"]["truncated"])
+        self.assertIn("10300", r["next"]["needs"])
 
 
 class DebtAndReviewTests(unittest.TestCase):

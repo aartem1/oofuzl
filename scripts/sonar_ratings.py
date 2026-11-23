@@ -89,15 +89,29 @@ def _first(measures, *keys):
 SEARCH_LIMIT = 10000
 
 
-def _issues(api, project, quality):
+def _search(api, project, quality, severity, page, size):
+    return api.get("/api/issues/search", components=project, resolved="false",
+                   impactSoftwareQualities=quality, impactSeverities=severity, ps=size, p=page)
+
+
+def _total(body):
+    return int(body.get("paging", {}).get("total", body.get("total", 0)) or 0)
+
+
+def _counts(api, project, quality):
+    # One cheap query per severity: the counts stay exact however many
+    # issues the project has.
+    return {s: _total(_search(api, project, quality, s, 1, 1)) for s in SEVERITY_ORDER}
+
+
+def _issues(api, project, quality, severity):
+    """The open issues of one severity. The search answers 400 past its
+    10 000th result, so a larger set is cut there and marked truncated."""
     issues, page = [], 1
     while True:
-        body = api.get("/api/issues/search", components=project, resolved="false",
-                       impactSoftwareQualities=quality, ps=500, p=page)
+        body = _search(api, project, quality, severity, page, 500)
         issues.extend(body.get("issues", []))
-        total = body.get("paging", {}).get("total", body.get("total", 0))
-        # The search answers 400 past its 10 000th result; the worst issues
-        # that set the letter are a small part of that.
+        total = _total(body)
         if page * 500 >= min(total, SEARCH_LIMIT) or not body.get("issues"):
             return issues
         page += 1
@@ -117,16 +131,11 @@ def _locator(issue, project):
             "line": issue.get("line"), "message": issue.get("message")}
 
 
-def explain_issue_rating(name, quality, measured_letter, issues, project):
-    by_severity = {s: [] for s in SEVERITY_ORDER}
-    for issue in issues:
-        severity = _impact(issue, quality)
-        if severity in by_severity:
-            by_severity[severity].append(issue)
-    present = [s for s in SEVERITY_ORDER if by_severity[s]]
+def explain_issue_rating(name, quality, measured_letter, counts, worst_issues, project):
+    present = [s for s in SEVERITY_ORDER if counts.get(s)]
     computed = SEVERITY_LETTER[present[0]] if present else "A"
     out = {"rating": name, "letter": measured_letter or computed, "computed_letter": computed,
-           "counts": {s: len(by_severity[s]) for s in SEVERITY_ORDER}}
+           "counts": {s: counts.get(s, 0) for s in SEVERITY_ORDER}}
     if measured_letter and measured_letter != computed:
         out["mismatch"] = ("Sonar показывает %s, а открытые задачи дают %s: анализ устарел или "
                            "часть задач вне выборки." % (measured_letter, computed))
@@ -136,11 +145,19 @@ def explain_issue_rating(name, quality, measured_letter, issues, project):
         return out
     worst = present[0]
     after = SEVERITY_LETTER[present[1]] if len(present) > 1 else "A"
-    out["driven_by"] = {"severity": worst,
-                        "issues": [_locator(i, project) for i in by_severity[worst]]}
+    shown = [i for i in worst_issues if _impact(i, quality) == worst]
+    out["driven_by"] = {"severity": worst, "issues": [_locator(i, project) for i in shown],
+                        "truncated": len(shown) < counts[worst]}
     out["next"] = {"letter": after,
-                   "needs": "закрыть все %d задач серьёзности %s" % (len(by_severity[worst]), worst)}
+                   "needs": "закрыть все %d задач серьёзности %s" % (counts[worst], worst)}
     return out
+
+
+def _issue_rating(api, project, name, quality, measured_letter):
+    counts = _counts(api, project, quality)
+    worst = next((s for s in SEVERITY_ORDER if counts[s]), None)
+    issues = _issues(api, project, quality, worst) if worst else []
+    return explain_issue_rating(name, quality, measured_letter, counts, issues, project)
 
 
 def explain_debt(measures):
@@ -202,14 +219,12 @@ def _top_files(api, project, metric):
 
 def explain(api, project):
     measures = _measures(api, project)
-    reliability = explain_issue_rating(
-        "reliability", "RELIABILITY",
-        letter(_first(measures, "software_quality_reliability_rating", "reliability_rating")),
-        _issues(api, project, "RELIABILITY"), project)
-    security = explain_issue_rating(
-        "security", "SECURITY",
-        letter(_first(measures, "software_quality_security_rating", "security_rating")),
-        _issues(api, project, "SECURITY"), project)
+    reliability = _issue_rating(
+        api, project, "reliability", "RELIABILITY",
+        letter(_first(measures, "software_quality_reliability_rating", "reliability_rating")))
+    security = _issue_rating(
+        api, project, "security", "SECURITY",
+        letter(_first(measures, "software_quality_security_rating", "security_rating")))
     maintainability = explain_debt(measures)
     if maintainability.get("next"):
         maintainability["top_files"] = _top_files(api, project, "sqale_index")
